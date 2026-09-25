@@ -348,3 +348,37 @@ func TestTheLoginPromptNamesThePlatform(t *testing.T) {
 		t.Errorf("prompt: %q", prompted)
 	}
 }
+
+func TestTheLoginPromptSaysWhereTheURLCameFrom(t *testing.T) {
+	server := fakeAPI(t, map[string]any{"/whoami": map[string]any{"login": "a", "name": "A"}})
+	cases := []struct {
+		name, flag, env, saved, want string
+	}{
+		{"typed", server.URL, "", "", "Logging in to " + server.URL + "\n"},
+		{"saved", "", "", server.URL, "Logging in to " + server.URL + " (your last platform — use --url for another)\n"},
+		{"env", "", server.URL, "", "Logging in to " + server.URL + " (from CW_URL)\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, nil)
+			h.env["CW_URL"] = c.env
+			if c.saved != "" {
+				if err := h.app.saveConfig(config{URL: c.saved}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var prompted string
+			h.app.readSecret = func(prompt string) (string, error) { prompted = h.stderr.String(); return goodToken, nil }
+			args := []string{"login"}
+			if c.flag != "" {
+				args = append(args, "--url", c.flag)
+			}
+			if code := h.run(args...); code != 0 {
+				t.Fatalf("exit %d: %s", code, h.stderr)
+			}
+			if prompted != c.want {
+				t.Errorf("prompt %q, want %q", prompted, c.want)
+			}
+		})
+	}
+}

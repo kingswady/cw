@@ -26,11 +26,11 @@ func (a *app) login(args []string) error {
 	if _, err := parseArgs(fs, args); err != nil {
 		return err
 	}
-	base, err := a.baseURL(*urlFlag)
+	base, source, err := a.platform(*urlFlag)
 	if err != nil {
 		return err
 	}
-	token, err := a.readToken(base, *withToken)
+	token, err := a.readToken(base+platformNote(source), *withToken)
 	if err != nil {
 		return err
 	}
@@ -74,13 +74,14 @@ func checkToken(c *client) (*whoamiData, error) {
 	return &me, nil
 }
 
-func (a *app) readToken(base string, fromStdin bool) (string, error) {
+// readToken asks for the token; target is the platform as the prompt names it.
+func (a *app) readToken(target string, fromStdin bool) (string, error) {
 	if fromStdin || a.readSecret == nil {
 		raw, err := io.ReadAll(io.LimitReader(a.stdin, 4096))
 		return strings.TrimSpace(string(raw)), err
 	}
 	// Say where the token will go before asking for it (--url picks another platform).
-	fmt.Fprintf(a.stderr, "Logging in to %s\n", base)
+	fmt.Fprintf(a.stderr, "Logging in to %s\n", target)
 	token, err := a.readSecret("Paste your API token (My Settings → API Tokens): ")
 	return strings.TrimSpace(token), err
 }

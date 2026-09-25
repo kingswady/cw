@@ -32,6 +32,8 @@ echo "$TOKEN" | cw login --with-token      # from a script
 cw whoami
 ```
 
+A later `cw login` goes back to the platform you last logged in to, and says so; `--url` picks another.
+
 The token is kept in the system keychain (macOS Keychain, Windows Credential Manager, the Secret Service on
 Linux). Where there is none, it goes to a file only you can read, next to `cw`'s config. `cw logout` forgets
 it; revoke it in the dashboard if it may have leaked.

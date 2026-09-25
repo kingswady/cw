@@ -41,12 +41,42 @@ func (a *app) saveConfig(cfg config) error {
 // baseURL is the platform to talk to: an explicit value, then CW_URL, then
 // the one saved at login, then the default.
 func (a *app) baseURL(explicit string) (string, error) {
-	for _, candidate := range []string{explicit, a.getenv("CW_URL"), a.loadConfig().URL} {
-		if candidate != "" {
-			return normalizeURL(candidate)
+	base, _, err := a.platform(explicit)
+	return base, err
+}
+
+// Where the platform URL came from, so login can say why it picked it.
+const (
+	fromFlag    = "flag"
+	fromEnv     = "env"
+	fromSaved   = "saved"
+	fromDefault = "default"
+)
+
+func (a *app) platform(explicit string) (string, string, error) {
+	candidates := []struct{ value, source string }{
+		{explicit, fromFlag},
+		{a.getenv("CW_URL"), fromEnv},
+		{a.loadConfig().URL, fromSaved},
+	}
+	for _, candidate := range candidates {
+		if candidate.value != "" {
+			base, err := normalizeURL(candidate.value)
+			return base, candidate.source, err
 		}
 	}
-	return defaultURL, nil
+	return defaultURL, fromDefault, nil
+}
+
+// platformNote explains a URL the user did not type on this command line.
+func platformNote(source string) string {
+	switch source {
+	case fromEnv:
+		return " (from CW_URL)"
+	case fromSaved:
+		return " (your last platform — use --url for another)"
+	}
+	return ""
 }
 
 // normalizeURL accepts "host", "https://host/" and "http://localhost:8069";
