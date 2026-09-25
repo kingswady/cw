@@ -1,0 +1,39 @@
+# Release: push a tag (git tag v1.0.0 && git push --tags); .github/workflows/release.yml runs this.
+# Archive names carry no version so https://github.com/kingswady/cw/releases/latest/download/<name>
+# always resolves — the platform's /install.sh relies on it.
+version: 2
+project_name: cw
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - env: [CGO_ENABLED=0]
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version={{ .Version }}"]
+
+archives:
+  - name_template: "cw_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [README.md, LICENSE]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+
+release:
+  github:
+    owner: kingswady
+    name: cw
