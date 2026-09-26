@@ -68,6 +68,23 @@ Every read command takes `--json` (the API's own response, for `jq`), `--namespa
 `--offset` and `--color auto|always|never` (coloured in a terminal unless `NO_COLOR` is set). `apps`, `servers`
 and `installers` leave deleted records out unless `--all`. A token never sees more than its namespaces and your own access, whatever you ask for.
 
+## What needs attention
+
+```bash
+cw attention                    # the dashboard's "Needs attention", with the apps, URLs and runs behind it
+cw attention --namespace acme --json
+```
+
+Apps in error, production backups critical, missing or stale, TLS certificates expired or expiring, and runs
+that failed in the last day — the same rules and counts as the dashboard, so the two never disagree. It exits
+`3` when something needs attention and `0` when nothing does, so a script or a cron job can act on it:
+
+```bash
+cw attention > report.txt || mail -s "CloudWady needs attention" ops@example.com < report.txt
+```
+
+The token needs **Attention** in what it can read; add it to an existing token by editing the token.
+
 ## Logs
 
 ```bash
@@ -89,7 +106,7 @@ cw runs --app shop --state error --json
 ```
 
 `CW_TOKEN` overrides the saved token; `CW_URL` the saved platform. Exit codes: `0` success, `1` the platform
-refused or failed, `2` a mistake on the command line.
+refused or failed, `2` a mistake on the command line, `3` `cw attention` found something.
 
 ## License
 

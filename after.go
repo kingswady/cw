@@ -19,7 +19,7 @@ const (
 // exit code.
 func (a *app) afterCommand(name string, code int) {
 	a.warnExpiry()
-	if code == 0 && name != "update" && name != "version" {
+	if (code == 0 || code == exitAttention) && name != "update" && name != "version" {
 		a.hintUpdate()
 	}
 }

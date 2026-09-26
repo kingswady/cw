@@ -118,6 +118,8 @@ func (a *app) dispatch(name string, rest []string) int {
 		return a.exit(a.whoami(rest))
 	case "logs":
 		return a.exit(a.logs(rest))
+	case "attention":
+		return a.exit(a.attention(rest))
 	case "update":
 		return a.exit(a.update(rest))
 	case "use":
@@ -137,6 +139,8 @@ func (a *app) exit(err error) int {
 	switch {
 	case err == nil, errors.Is(err, flag.ErrHelp):
 		return 0
+	case errors.Is(err, errNeedsAttention):
+		return exitAttention
 	case errors.As(err, &usage), errors.As(err, &refused) && refused.status == http.StatusBadRequest:
 		// A 400 is the platform saying the command line was wrong (--limit 0).
 		fmt.Fprintln(a.stderr, "cw:", err)
@@ -160,6 +164,7 @@ Account
   update       Update cw to the latest release (--check only looks)
 
 Read
+  attention    What needs attention now   exit code 3 when something does
   apps         List apps                  cw apps show <id|name>
   servers      List servers               cw servers show <id|name>
   installers   List installed services    cw installers show <id|name>

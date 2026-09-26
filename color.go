@@ -109,6 +109,9 @@ var cellStyles = map[string]func(string) string{
 	"backup_health": func(v string) string {
 		return map[string]string{"healthy": ansiGreen, "warning": ansiYellow, "critical": ansiRed, "none": ansiDim}[v]
 	},
+	"ssl_status": func(v string) string {
+		return map[string]string{"expired": ansiRed, "error": ansiRed, "expiring_soon": ansiYellow, "unknown": ansiYellow}[v]
+	},
 	"automated":      yesNoColor,
 	"platform_login": yesNoColor,
 	"version":        func(string) string { return ansiCyan },
