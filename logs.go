@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -32,6 +33,7 @@ func (a *app) logs(args []string) error {
 	follow := fs.Bool("follow", false, "keep printing new lines until interrupted (Ctrl-C)")
 	asJSON := fs.Bool("json", false, "print each API answer as JSON")
 	namespace := fs.String("namespace", "", "look the app up in this namespace only")
+	colorMode := fs.String("color", "auto", "auto (in a terminal, unless NO_COLOR is set), always or never")
 	fs.Usage = func() {
 		fmt.Fprintf(a.stderr, "Usage: cw logs <app> [flags]\n\nThe app's Odoo log, newest last.\n\nFlags:\n")
 		fs.PrintDefaults()
@@ -44,11 +46,15 @@ func (a *app) logs(args []string) error {
 		fs.Usage()
 		return usagef("name one app: cw logs <id|name>")
 	}
+	color, err := a.useColor(*colorMode, *asJSON)
+	if err != nil {
+		return err
+	}
 	c, err := a.client()
 	if err != nil {
 		return err
 	}
-	id, err := a.resolveID(c, resourceNamed("apps"), positional[0], *namespace)
+	id, err := a.resolveID(c, resourceNamed("apps"), positional[0], *namespace, false)
 	if err != nil {
 		return err
 	}
@@ -56,7 +62,8 @@ func (a *app) logs(args []string) error {
 	if *grep != "" {
 		query.Set("grep", *grep)
 	}
-	page, err := a.printLogs(c, id, query, *asJSON)
+	out := logOutput{json: *asJSON, color: color, grep: *grep}
+	page, err := a.printLogs(c, id, query, out)
 	if err != nil {
 		return err
 	}
@@ -66,13 +73,13 @@ func (a *app) logs(args []string) error {
 	if !*follow {
 		return nil
 	}
-	return a.followLogs(c, id, *grep, page.Cursor, *asJSON)
+	return a.followLogs(c, id, page.Cursor, out)
 }
 
 // followLogs asks for lines after the cursor until interrupted. A refusal
 // that will not heal (token, access, app gone) ends it; anything else is
 // reported and retried.
-func (a *app) followLogs(c *client, id, grep, cursor string, asJSON bool) error {
+func (a *app) followLogs(c *client, id, cursor string, out logOutput) error {
 	ctx, stop := a.interrupt()
 	defer stop()
 	for {
@@ -81,10 +88,10 @@ func (a *app) followLogs(c *client, id, grep, cursor string, asJSON bool) error 
 		}
 		for {
 			query := url.Values{"after": {cursor}, "limit": {"2000"}}
-			if grep != "" {
-				query.Set("grep", grep)
+			if out.grep != "" {
+				query.Set("grep", out.grep)
 			}
-			page, err := a.printLogs(c, id, query, asJSON)
+			page, err := a.printLogs(c, id, query, out)
 			if err != nil {
 				var refused *apiError
 				if errors.As(err, &refused) && refused.status >= 400 && refused.status < 500 {
@@ -101,7 +108,14 @@ func (a *app) followLogs(c *client, id, grep, cursor string, asJSON bool) error 
 	}
 }
 
-func (a *app) printLogs(c *client, id string, query url.Values, asJSON bool) (logPage, error) {
+// logOutput is how answers are printed: raw JSON, or lines — coloured in a terminal.
+type logOutput struct {
+	json  bool
+	color bool
+	grep  string
+}
+
+func (a *app) printLogs(c *client, id string, query url.Values, out logOutput) (logPage, error) {
 	var page logPage
 	raw, err := c.get("/apps/"+id+"/logs", query)
 	if err != nil {
@@ -110,13 +124,31 @@ func (a *app) printLogs(c *client, id string, query url.Values, asJSON bool) (lo
 	if err := json.Unmarshal(raw, &page); err != nil {
 		return page, err
 	}
-	if asJSON {
+	if out.json {
 		return page, writeJSON(a.stdout, raw)
 	}
 	for _, item := range page.Items {
-		fmt.Fprintln(a.stdout, item.Line)
+		line := strings.TrimRight(item.Line, "\n ")
+		if out.color {
+			line = colorize(line, out.grep)
+		}
+		fmt.Fprintln(a.stdout, line)
 	}
 	return page, nil
+}
+
+// useColor decides --color: auto colours a terminal unless NO_COLOR is set
+// (https://no-color.org); JSON is never coloured.
+func (a *app) useColor(mode string, asJSON bool) (bool, error) {
+	switch mode {
+	case "always":
+		return !asJSON, nil
+	case "never":
+		return false, nil
+	case "auto":
+		return !asJSON && a.getenv("NO_COLOR") == "" && a.stdoutIsTerminal(), nil
+	}
+	return false, usagef("--color is auto, always or never, not %q", mode)
 }
 
 // signalContext ends on Ctrl-C.

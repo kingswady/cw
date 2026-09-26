@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
-	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 )
 
 // legacyTime is how API servers before RFC 3339 datetimes wrote them (naive UTC).
@@ -26,16 +27,43 @@ func writeJSON(w io.Writer, raw json.RawMessage) error {
 	return err
 }
 
-// writeTable aligns rows under headers; nil headers print rows only.
+// ansiEscape matches the colour codes this program writes.
+var ansiEscape = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// visibleWidth is what a terminal shows of s: colour codes take no room.
+func visibleWidth(s string) int {
+	return utf8.RuneCountInString(ansiEscape.ReplaceAllString(s, ""))
+}
+
+// writeTable aligns rows under headers by visible width (text/tabwriter would
+// count colour codes as characters); nil headers print rows only.
 func writeTable(w io.Writer, headers []string, rows [][]string) error {
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	all := rows
 	if headers != nil {
-		fmt.Fprintln(tw, strings.Join(headers, "\t"))
+		all = append([][]string{headers}, rows...)
 	}
-	for _, row := range rows {
-		fmt.Fprintln(tw, strings.Join(row, "\t"))
+	var widths []int
+	for _, row := range all {
+		for i, cell := range row {
+			if i == len(widths) {
+				widths = append(widths, 0)
+			}
+			widths[i] = max(widths[i], visibleWidth(cell))
+		}
 	}
-	return tw.Flush()
+	for _, row := range all {
+		var line strings.Builder
+		for i, cell := range row {
+			line.WriteString(cell)
+			if i < len(row)-1 {
+				line.WriteString(strings.Repeat(" ", widths[i]-visibleWidth(cell)+2))
+			}
+		}
+		if _, err := fmt.Fprintln(w, strings.TrimRight(line.String(), " ")); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // text renders one JSON value for a cell: null and "" read as "-".

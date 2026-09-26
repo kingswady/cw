@@ -20,6 +20,15 @@ Windows: download `cw_windows_amd64.zip` from the [releases](https://github.com/
 
 From source (Go 1.26+, or Docker): `make build` → `bin/cw`; `make docker-dist` builds every platform.
 
+## Update
+
+```bash
+cw update            # to the latest release, checked and swapped in place
+cw update --check    # only look
+```
+
+In a terminal, cw mentions a newer release at most once a day (never in CI; `CW_NO_UPDATE_CHECK=1` turns it off).
+
 ## Log in
 
 Create a token in the dashboard under **My Settings → API Tokens**: choose its namespaces and what it may
@@ -33,6 +42,8 @@ cw whoami
 ```
 
 A later `cw login` goes back to the platform you last logged in to, and says so; `--url` picks another.
+`cw use` lists the platforms you logged in to and `cw use <address>` switches between them — each keeps its own
+token. `cw whoami` shows when the token expires, and every command warns in its last week.
 
 The token is kept in the system keychain (macOS Keychain, Windows Credential Manager, the Secret Service on
 Linux). Where there is none, it goes to a file only you can read, next to `cw`'s config. `cw logout` forgets
@@ -41,8 +52,10 @@ it; revoke it in the dashboard if it may have leaked.
 ## Read
 
 ```bash
-cw apps                          # all apps the token can see
-cw apps --env production
+cw apps                          # the token's apps (deleted ones only with --all)
+cw apps --search shop            # name contains "shop", any case
+cw apps --env production --version 19.0 --edition enterprise
+cw apps --server prod-1 --project acme --show-url
 cw apps show shop                # by name or id
 cw servers
 cw installers --server prod-1
@@ -51,8 +64,9 @@ cw runs --app shop --state error
 cw runs show 4812                # steps, and why a failed step failed
 ```
 
-Every read command takes `--json` (the API's own response, for `jq`), `--namespace <code>`, `--limit` and
-`--offset`. A token never sees more than its namespaces and your own access, whatever you ask for.
+Every read command takes `--json` (the API's own response, for `jq`), `--namespace <code>`, `--limit`,
+`--offset` and `--color auto|always|never` (coloured in a terminal unless `NO_COLOR` is set). `apps`, `servers`
+and `installers` leave deleted records out unless `--all`. A token never sees more than its namespaces and your own access, whatever you ask for.
 
 ## Logs
 

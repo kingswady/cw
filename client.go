@@ -13,6 +13,8 @@ type client struct {
 	base  string
 	token string
 	http  *http.Client
+	// tokenExpires is the X-Token-Expires-At of the last answer (RFC 3339).
+	tokenExpires string
 }
 
 // apiError is a refusal from the platform, with its machine-readable code.
@@ -44,7 +46,8 @@ func (a *app) client() (*client, error) {
 			return nil, fmt.Errorf("not logged in to %s — run: cw login", base)
 		}
 	}
-	return &client{base: base, token: token, http: a.httpClient}, nil
+	a.current = &client{base: base, token: token, http: a.httpClient}
+	return a.current, nil
 }
 
 // get returns the response's "data" member.
@@ -65,6 +68,9 @@ func (c *client) get(path string, query url.Values) (json.RawMessage, error) {
 		return nil, fmt.Errorf("cannot reach %s: %w", c.base, err)
 	}
 	defer resp.Body.Close()
+	if expires := resp.Header.Get("X-Token-Expires-At"); expires != "" {
+		c.tokenExpires = expires
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
 		return nil, fmt.Errorf("reading the response from %s: %w", c.base, err)

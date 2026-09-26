@@ -45,7 +45,10 @@ func (a *app) login(args []string) error {
 	if err != nil {
 		return fmt.Errorf("saving the token: %w", err)
 	}
-	if err := a.saveConfig(config{URL: base}); err != nil {
+	cfg := a.loadConfig()
+	cfg.URL = base
+	cfg.remember(base)
+	if err := a.saveConfig(cfg); err != nil {
 		return fmt.Errorf("saving the config: %w", err)
 	}
 	if me == nil {
@@ -98,6 +101,11 @@ func (a *app) logout(args []string) error {
 	if err := a.secrets.Delete(base); err != nil {
 		return err
 	}
+	cfg := a.loadConfig()
+	cfg.forget(base)
+	if err := a.saveConfig(cfg); err != nil {
+		return err
+	}
 	fmt.Fprintf(a.stdout, "Logged out of %s. Revoke the token in My Settings → API Tokens if it may have leaked.\n", base)
 	return nil
 }
@@ -105,7 +113,12 @@ func (a *app) logout(args []string) error {
 func (a *app) whoami(args []string) error {
 	fs := a.newFlags("whoami")
 	asJSON := fs.Bool("json", false, "print the API response as JSON")
+	colorMode := fs.String("color", "auto", "auto (in a terminal, unless NO_COLOR is set), always or never")
 	if _, err := parseArgs(fs, args); err != nil {
+		return err
+	}
+	color, err := a.useColor(*colorMode, *asJSON)
+	if err != nil {
 		return err
 	}
 	c, err := a.client()
@@ -123,10 +136,14 @@ func (a *app) whoami(args []string) error {
 	if err := decode(raw, &me); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "%s (%s) on %s\n\n", me.Name, me.Login, c.base)
+	fmt.Fprintf(a.stdout, "%s (%s) on %s\n", me.Name, me.Login, c.base)
+	if expires, ok := parseServerTime(c.tokenExpires); ok {
+		fmt.Fprintf(a.stdout, "Token expires %s (%s)\n", expires.Local().Format("2006-01-02 15:04"), untilText(a.clock(), expires))
+	}
+	fmt.Fprintln(a.stdout)
 	rows := make([][]string, 0, len(me.Namespaces))
 	for _, ns := range me.Namespaces {
 		rows = append(rows, []string{ns.Name, ns.Code, ns.Level})
 	}
-	return writeTable(a.stdout, []string{"NAMESPACE", "CODE", "LEVEL"}, rows)
+	return writeTable(a.stdout, tableOutput{color: color}.headers([]string{"NAMESPACE", "CODE", "LEVEL"}), rows)
 }

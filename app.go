@@ -28,6 +28,14 @@ type app struct {
 	// interrupt and wait pace --follow; tests replace them.
 	interrupt func() (context.Context, func())
 	wait      func(ctx context.Context, d time.Duration) bool
+	// stdoutIsTerminal decides whether logs are coloured by default.
+	stdoutIsTerminal func() bool
+	// executable is the file cw update replaces.
+	executable func() (string, error)
+	// current is the client the command used, for its token's expiry.
+	current *client
+	// now is swapped in tests.
+	clock func() time.Time
 }
 
 func newApp() *app {
@@ -46,6 +54,11 @@ func newApp() *app {
 		httpClient: newHTTPClient(),
 		interrupt:  signalContext,
 		wait:       sleepOrDone,
+		stdoutIsTerminal: func() bool {
+			return term.IsTerminal(int(os.Stdout.Fd()))
+		},
+		executable: executablePath,
+		clock:      time.Now,
 	}
 	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
 		a.readSecret = func(prompt string) (string, error) {
@@ -84,6 +97,12 @@ func (a *app) run(args []string) int {
 		return 2
 	}
 	name, rest := args[0], args[1:]
+	code := a.dispatch(name, rest)
+	a.afterCommand(name, code)
+	return code
+}
+
+func (a *app) dispatch(name string, rest []string) int {
 	switch name {
 	case "help", "-h", "--help":
 		a.usage(a.stdout)
@@ -99,6 +118,10 @@ func (a *app) run(args []string) int {
 		return a.exit(a.whoami(rest))
 	case "logs":
 		return a.exit(a.logs(rest))
+	case "update":
+		return a.exit(a.update(rest))
+	case "use":
+		return a.exit(a.use(rest))
 	}
 	if res := resourceNamed(name); res != nil {
 		return a.exit(a.resource(res, rest))
@@ -133,6 +156,8 @@ Account
   login        Save an API token (create one in My Settings → API Tokens)
   logout       Forget the saved token
   whoami       Show who the token acts as, and its namespaces
+  use          Switch between platforms you logged in to
+  update       Update cw to the latest release (--check only looks)
 
 Read
   apps         List apps                  cw apps show <id|name>

@@ -22,6 +22,27 @@ var errNoToken = errors.New("no token saved")
 
 type config struct {
 	URL string `json:"url"`
+	// Platforms are the ones logged in to, for cw use.
+	Platforms []string `json:"platforms,omitempty"`
+}
+
+func (cfg *config) remember(base string) {
+	for _, known := range cfg.Platforms {
+		if known == base {
+			return
+		}
+	}
+	cfg.Platforms = append(cfg.Platforms, base)
+}
+
+func (cfg *config) forget(base string) {
+	kept := cfg.Platforms[:0]
+	for _, known := range cfg.Platforms {
+		if known != base {
+			kept = append(kept, known)
+		}
+	}
+	cfg.Platforms = kept
 }
 
 func (a *app) configPath() string { return filepath.Join(a.configDir, "config.json") }

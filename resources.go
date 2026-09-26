@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/url"
@@ -43,16 +44,32 @@ type resource struct {
 	columns []field
 	details []field
 	// extra prints what a detail view has beyond its fields (a run's steps).
-	extra func(a *app, r record) error
+	extra func(a *app, r record, out tableOutput) error
+	// hidesDeleted: the API leaves deleted records out unless asked (--all).
+	hidesDeleted bool
+	// optional columns, each shown when its own flag is given (--show-url).
+	optional []optionalColumn
+}
+
+type optionalColumn struct {
+	flag  string
+	usage string
+	field field
 }
 
 var namespaceField = field{key: "namespace", title: "NAMESPACE"}
 
 var resources = []*resource{
 	{
-		name: "apps", singular: "app", byName: true,
+		name: "apps", singular: "app", byName: true, hidesDeleted: true,
+		optional: []optionalColumn{{flag: "show-url", usage: "add the URL column", field: field{key: "url", title: "URL"}}},
 		filters: []filter{
+			{flag: "search", param: "search", usage: "only apps whose name contains this (any case)"},
 			{flag: "env", param: "environment_type", usage: "production, staging or development"},
+			{flag: "server", param: "server_id", usage: "only apps on this server (id or name)", lookup: "servers"},
+			{flag: "version", param: "version", usage: "only this Odoo version, e.g. 19.0"},
+			{flag: "edition", param: "edition", usage: "community or enterprise"},
+			{flag: "project", param: "project", usage: "only apps whose project name or code contains this"},
 			{flag: "state", param: "state", usage: "only apps in this state"},
 		},
 		columns: []field{
@@ -74,7 +91,7 @@ var resources = []*resource{
 		},
 	},
 	{
-		name: "servers", singular: "server", byName: true,
+		name: "servers", singular: "server", byName: true, hidesDeleted: true,
 		filters: []filter{{flag: "state", param: "state", usage: "only servers in this state"}},
 		columns: []field{
 			{key: "id", title: "ID"}, {key: "name", title: "NAME"}, {key: "state", title: "STATE"},
@@ -90,7 +107,7 @@ var resources = []*resource{
 		},
 	},
 	{
-		name: "installers", singular: "installer", byName: true,
+		name: "installers", singular: "installer", byName: true, hidesDeleted: true,
 		filters: []filter{
 			{flag: "server", param: "server_id", usage: "only on this server (id or name)", lookup: "servers"},
 			{flag: "state", param: "state", usage: "only installers in this state"},
@@ -160,13 +177,23 @@ type readFlags struct {
 	namespace string
 	limit     int
 	offset    int
+	color     string
+	all       bool
 	filters   map[string]*string
+	optional  map[string]*bool
 }
 
 func (a *app) readFlagSet(res *resource) (*flag.FlagSet, *readFlags) {
 	fs := a.newFlags(res.name)
-	opts := &readFlags{filters: map[string]*string{}}
+	opts := &readFlags{filters: map[string]*string{}, optional: map[string]*bool{}}
 	fs.BoolVar(&opts.json, "json", false, "print the API response as JSON")
+	fs.StringVar(&opts.color, "color", "auto", "auto (in a terminal, unless NO_COLOR is set), always or never")
+	if res.hidesDeleted {
+		fs.BoolVar(&opts.all, "all", false, "include deleted "+res.name)
+	}
+	for _, column := range res.optional {
+		opts.optional[column.flag] = fs.Bool(column.flag, false, column.usage)
+	}
 	fs.StringVar(&opts.namespace, "namespace", "", "only this namespace (code or id)")
 	fs.IntVar(&opts.limit, "limit", 50, "rows per page (1-200)")
 	fs.IntVar(&opts.offset, "offset", 0, "rows to skip")
@@ -190,23 +217,85 @@ func (a *app) resource(res *resource, args []string) error {
 	if err != nil {
 		return err
 	}
+	color, err := a.useColor(opts.color, opts.json)
+	if err != nil {
+		return err
+	}
 	c, err := a.client()
 	if err != nil {
 		return err
 	}
+	out := tableOutput{color: color}
 	switch {
 	case len(positional) == 0:
-		return a.list(c, res, opts)
+		return a.list(c, res, opts, out)
 	case positional[0] == "show" && len(positional) == 2:
-		return a.show(c, res, opts, positional[1])
+		return a.show(c, res, opts, positional[1], out)
 	default:
 		fs.Usage()
 		return usagef("unexpected arguments: %s", strings.Join(positional, " "))
 	}
 }
 
-func (a *app) list(c *client, res *resource, opts *readFlags) error {
+// tableOutput is how tables print: plain, or coloured for a terminal.
+type tableOutput struct{ color bool }
+
+func (out tableOutput) cell(key, text string) string {
+	if out.color {
+		return style(key, text)
+	}
+	return text
+}
+
+func (out tableOutput) headers(titles []string) []string {
+	if out.color {
+		return boldAll(titles)
+	}
+	return titles
+}
+
+func (out tableOutput) label(text string) string {
+	if out.color {
+		return paint(ansiDim, text)
+	}
+	return text
+}
+
+// columnsFor is the resource's columns plus the optional ones asked for,
+// placed before the trailing namespace column.
+func columnsFor(res *resource, opts *readFlags) []field {
+	columns := append([]field{}, res.columns...)
+	for _, column := range res.optional {
+		if !*opts.optional[column.flag] {
+			continue
+		}
+		at := len(columns)
+		if at > 0 && columns[at-1].key == namespaceField.key {
+			at--
+		}
+		columns = append(columns[:at], append([]field{column.field}, columns[at:]...)...)
+	}
+	return columns
+}
+
+// getList asks for one list page. A platform older than include_deleted
+// answers unknown_parameter and already lists deleted records, so the
+// parameter is dropped there.
+func getList(c *client, path string, query url.Values) (json.RawMessage, error) {
+	raw, err := c.get(path, query)
+	var refused *apiError
+	if errors.As(err, &refused) && refused.code == "unknown_parameter" && query.Has("include_deleted") {
+		query.Del("include_deleted")
+		return c.get(path, query)
+	}
+	return raw, err
+}
+
+func (a *app) list(c *client, res *resource, opts *readFlags, out tableOutput) error {
 	query := url.Values{"limit": {strconv.Itoa(opts.limit)}, "offset": {strconv.Itoa(opts.offset)}}
+	if opts.all {
+		query.Set("include_deleted", "true")
+	}
 	if opts.namespace != "" {
 		query.Set("namespace", opts.namespace)
 	}
@@ -216,7 +305,7 @@ func (a *app) list(c *client, res *resource, opts *readFlags) error {
 			continue
 		}
 		if f.lookup != "" {
-			id, err := a.resolveID(c, resourceNamed(f.lookup), value, opts.namespace)
+			id, err := a.resolveID(c, resourceNamed(f.lookup), value, opts.namespace, false)
 			if err != nil {
 				return err
 			}
@@ -224,7 +313,7 @@ func (a *app) list(c *client, res *resource, opts *readFlags) error {
 		}
 		query.Set(f.param, value)
 	}
-	raw, err := c.get("/"+res.name, query)
+	raw, err := getList(c, "/"+res.name, query)
 	if err != nil {
 		return err
 	}
@@ -242,7 +331,7 @@ func (a *app) list(c *client, res *resource, opts *readFlags) error {
 		fmt.Fprintf(a.stderr, "No %s.\n", res.name)
 		return nil
 	}
-	columns := visibleColumns(res.columns, page.Items)
+	columns := visibleColumns(columnsFor(res, opts), page.Items)
 	headers := make([]string, len(columns))
 	for i, col := range columns {
 		headers[i] = col.title
@@ -251,10 +340,10 @@ func (a *app) list(c *client, res *resource, opts *readFlags) error {
 	for i, item := range page.Items {
 		rows[i] = make([]string, len(columns))
 		for j, col := range columns {
-			rows[i][j] = col.render(item)
+			rows[i][j] = out.cell(col.key, col.render(item))
 		}
 	}
-	if err := writeTable(a.stdout, headers, rows); err != nil {
+	if err := writeTable(a.stdout, out.headers(headers), rows); err != nil {
 		return err
 	}
 	if total, _ := page.Total.Int64(); int(total) > opts.offset+len(page.Items) {
@@ -282,8 +371,8 @@ func visibleColumns(columns []field, items []record) []field {
 	return visible
 }
 
-func (a *app) show(c *client, res *resource, opts *readFlags, ref string) error {
-	id, err := a.resolveID(c, res, ref, opts.namespace)
+func (a *app) show(c *client, res *resource, opts *readFlags, ref string, out tableOutput) error {
+	id, err := a.resolveID(c, res, ref, opts.namespace, opts.all)
 	if err != nil {
 		return err
 	}
@@ -300,19 +389,20 @@ func (a *app) show(c *client, res *resource, opts *readFlags, ref string) error 
 	}
 	rows := make([][]string, len(res.details))
 	for i, f := range res.details {
-		rows[i] = []string{f.title + ":", f.render(item)}
+		rows[i] = []string{out.label(f.title + ":"), out.cell(f.key, f.render(item))}
 	}
 	if err := writeTable(a.stdout, nil, rows); err != nil {
 		return err
 	}
 	if res.extra != nil {
-		return res.extra(a, item)
+		return res.extra(a, item, out)
 	}
 	return nil
 }
 
 // resolveID accepts an id, or the exact name of one record the token can see.
-func (a *app) resolveID(c *client, res *resource, ref, namespace string) (string, error) {
+// Deleted records are left out unless includeDeleted (--all); their ids still work.
+func (a *app) resolveID(c *client, res *resource, ref, namespace string, includeDeleted bool) (string, error) {
 	if _, err := strconv.Atoi(ref); err == nil {
 		return ref, nil
 	}
@@ -325,7 +415,10 @@ func (a *app) resolveID(c *client, res *resource, ref, namespace string) (string
 		if namespace != "" {
 			query.Set("namespace", namespace)
 		}
-		raw, err := c.get("/"+res.name, query)
+		if includeDeleted && res.hidesDeleted {
+			query.Set("include_deleted", "true")
+		}
+		raw, err := getList(c, "/"+res.name, query)
 		if err != nil {
 			return "", err
 		}
@@ -358,31 +451,34 @@ func (a *app) resolveID(c *client, res *resource, ref, namespace string) (string
 	return "", fmt.Errorf("%d %ss are named %q — use an id: %s", len(matches), res.singular, ref, strings.Join(candidates, ", "))
 }
 
-func printSteps(a *app, run record) error {
+func printSteps(a *app, run record, out tableOutput) error {
 	steps, _ := run["steps"].([]any)
 	if len(steps) == 0 {
 		return nil
 	}
-	fmt.Fprintln(a.stdout, "\nSteps:")
+	fmt.Fprintln(a.stdout, "\n"+out.label("Steps:"))
 	rows := make([][]string, 0, len(steps))
 	var reasons []string
 	for i, raw := range steps {
 		step, _ := raw.(record)
 		rows = append(rows, []string{
-			strconv.Itoa(i + 1), text(step["name"]), text(step["state"]),
+			strconv.Itoa(i + 1), text(step["name"]), out.cell("state", text(step["state"])),
 			localTime(step["started_at"]), localTime(step["updated_at"]),
 		})
 		if reason := text(step["reason"]); reason != "-" {
 			// A reason can span lines (a task message); keep them under their step.
 			reason = strings.ReplaceAll(strings.TrimSpace(reason), "\n", "\n     ")
+			if out.color {
+				reason = paint(ansiRed, reason)
+			}
 			reasons = append(reasons, fmt.Sprintf("  %d. %s\n     %s", i+1, text(step["name"]), reason))
 		}
 	}
-	if err := writeTable(a.stdout, []string{"#", "STEP", "STATE", "STARTED", "UPDATED"}, rows); err != nil {
+	if err := writeTable(a.stdout, out.headers([]string{"#", "STEP", "STATE", "STARTED", "UPDATED"}), rows); err != nil {
 		return err
 	}
 	if len(reasons) > 0 {
-		fmt.Fprintln(a.stdout, "\nWhy:")
+		fmt.Fprintln(a.stdout, "\n"+out.label("Why:"))
 		fmt.Fprintln(a.stdout, strings.Join(reasons, "\n"))
 	}
 	return nil
