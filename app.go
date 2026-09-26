@@ -120,6 +120,8 @@ func (a *app) dispatch(name string, rest []string) int {
 		return a.exit(a.logs(rest))
 	case "attention":
 		return a.exit(a.attention(rest))
+	case "mcp":
+		return a.exit(a.mcp(rest))
 	case "update":
 		return a.exit(a.update(rest))
 	case "use":
@@ -171,6 +173,9 @@ Read
   backups      List backups               cw backups show <id>
   runs         List recent runs           cw runs show <id>
   logs         An app's Odoo log          cw logs <app> [--since 1h] [--grep …] [--follow]
+
+AI agents
+  mcp          Serve the platform's tools to an AI client (stdio): claude mcp add cloudwady -- cw mcp
 
 Flags on every read command
   --json              Print the API response as JSON

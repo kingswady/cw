@@ -97,6 +97,23 @@ cw logs shop --follow                # keep printing new lines (Ctrl-C to stop)
 The app's Odoo log, from the platform's log store — only that app's lines, secrets masked. `--grep` matches
 text, any case. The token needs **Logs** in what it can read.
 
+## AI agents (MCP)
+
+`cw mcp` serves the platform's tools to an AI client over stdio, with the token you logged in with:
+
+```bash
+claude mcp add cloudwady -- cw mcp       # Claude Code
+```
+
+```json
+{ "mcpServers": { "cloudwady": { "command": "cw", "args": ["mcp"] } } }
+```
+
+The agent gets the same read-only functions as the CLI — apps, servers, installed services, backups, runs, logs
+and what needs attention — limited to the token's namespaces and what it may read, plus prompts such as
+`triage` and `why_failed`. A client that speaks HTTP can connect to `https://www.cloudwady.com/mcp` directly,
+with the header `Authorization: Bearer cwk_…`.
+
 ## In CI
 
 ```bash
