@@ -40,6 +40,8 @@ type App struct {
 	wait      func(ctx context.Context, d time.Duration) bool
 	// stdoutIsTerminal decides whether logs are coloured by default.
 	stdoutIsTerminal func() bool
+	// stdinIsTerminal tells a person running cw mcp by hand from an AI client.
+	stdinIsTerminal func() bool
 	// executable is the file cw update replaces.
 	executable func() (string, error)
 	// current is the client the command used, for its token's expiry.
@@ -68,6 +70,9 @@ func New(version string) *App {
 		wait:       sleepOrDone,
 		stdoutIsTerminal: func() bool {
 			return term.IsTerminal(int(os.Stdout.Fd()))
+		},
+		stdinIsTerminal: func() bool {
+			return term.IsTerminal(int(os.Stdin.Fd()))
 		},
 		executable: selfupdate.ExecutablePath,
 		clock:      time.Now,
@@ -222,7 +227,7 @@ Read
   logs         An app's Odoo log          cw logs <app> [--since 1h] [--grep …] [--follow]
 
 AI agents
-  mcp          Serve the platform's tools to an AI client (stdio): claude mcp add cloudwady -- cw mcp
+  mcp          Serve the platform's tools to an AI client (stdio): claude mcp add -s user cloudwady -- cw mcp
 
 Flags on every read command
   --json              Print the API response as JSON

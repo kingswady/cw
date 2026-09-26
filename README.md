@@ -103,7 +103,7 @@ text, any case. The token needs **Logs** in what it can read.
 `cw mcp` serves the platform's tools to an AI client over stdio, with the token you logged in with:
 
 ```bash
-claude mcp add cloudwady -- cw mcp       # Claude Code
+claude mcp add -s user cloudwady -- cw mcp   # Claude Code, in every project
 ```
 
 ```json

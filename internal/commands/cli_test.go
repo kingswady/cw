@@ -82,6 +82,7 @@ func newHarness(t *testing.T, server *httptest.Server) *harness {
 		wait:       func(ctx context.Context, _ time.Duration) bool { return ctx.Err() == nil },
 		// Output captured into a buffer is never a terminal: plain unless asked.
 		stdoutIsTerminal: func() bool { return false },
+		stdinIsTerminal:  func() bool { return false },
 		clock:            time.Now,
 	}
 	return h

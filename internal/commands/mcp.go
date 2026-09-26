@@ -20,7 +20,7 @@ func (a *App) mcp(args []string) error {
 Serves the platform's tools to an AI client over stdio, with the token "cw login"
 saved (or CW_TOKEN). Add it to your client:
 
-  Claude Code   claude mcp add cloudwady -- cw mcp
+  Claude Code   claude mcp add -s user cloudwady -- cw mcp
   Cursor, …     {"mcpServers": {"cloudwady": {"command": "cw", "args": ["mcp"]}}}
   Codex         [mcp_servers.cloudwady]
                 command = "cw"
@@ -41,6 +41,13 @@ header "Authorization: Bearer <token>".
 	c, err := a.client()
 	if err != nil {
 		return err
+	}
+	if a.stdinIsTerminal() {
+		// A person ran it: say what it is instead of waiting in silence. stderr only —
+		// stdout carries the protocol.
+		fmt.Fprintf(a.stderr, "cw mcp serves %s's tools to an AI client and is waiting for one on stdin.\n"+
+			"Add it to Claude Code: claude mcp add -s user cloudwady -- cw mcp   (other clients: cw mcp --help)\n"+
+			"Ctrl-D to quit.\n", c.Base)
 	}
 	b := &mcpbridge.Bridge{
 		Endpoint:  c.Base + "/mcp",
