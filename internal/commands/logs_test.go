@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 const infoLine = "2026-09-26 13:16:25,466 56 INFO v19-0 odoo.addons.base.models.ir_cron: Job done"
@@ -117,5 +118,41 @@ func TestColorAlwaysColoursEvenWhenPiped(t *testing.T) {
 	}
 	if !strings.Contains(h.stdout.String(), "\x1b[1;32mINFO") {
 		t.Errorf("stdout %q", h.stdout)
+	}
+}
+
+func TestLogsFollowWaitsOutTheRateLimit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		switch calls {
+		case 1:
+			json.NewEncoder(w).Encode(map[string]any{"data": logAnswer("100", "old line")})
+		case 2:
+			w.Header().Set("Retry-After", "7")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":{"code":"rate_limited","message":"Too many requests; retry in 7 s"}}`))
+		default:
+			cancel() // the user pressed Ctrl-C
+			json.NewEncoder(w).Encode(map[string]any{"data": logAnswer("101", "new line")})
+		}
+	}))
+	t.Cleanup(server.Close)
+	h := newHarness(t, server)
+	var pauses []time.Duration
+	h.app.interrupt = func() (context.Context, func()) { return ctx, cancel }
+	h.app.wait = func(ctx context.Context, d time.Duration) bool {
+		pauses = append(pauses, d)
+		return ctx.Err() == nil
+	}
+	if code := h.run("logs", "7", "--follow"); code != 0 {
+		t.Fatalf("a rate limit must not end --follow: exit %d: %s", code, h.stderr)
+	}
+	if h.stdout.String() != "old line\nnew line\n" {
+		t.Errorf("stdout %q", h.stdout)
+	}
+	if len(pauses) < 2 || pauses[1] != 7*time.Second {
+		t.Errorf("pauses %v: the second wait must be the platform's Retry-After", pauses)
 	}
 }

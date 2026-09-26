@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -77,33 +78,48 @@ func (a *App) logs(args []string) error {
 }
 
 // followLogs asks for lines after the cursor until interrupted. A refusal
-// that will not heal (token, access, app gone) ends it; anything else is
-// reported and retried.
+// that will not heal (token, access, app gone) ends it; the rate limit is
+// waited out; anything else is reported and retried.
 func (a *App) followLogs(c *platform.Client, id, cursor string, out logOutput) error {
 	ctx, stop := a.interrupt()
 	defer stop()
+	pause := followInterval
 	for {
-		if !a.wait(ctx, followInterval) {
+		if !a.wait(ctx, pause) {
 			return nil
 		}
-		for {
-			query := url.Values{"after": {cursor}, "limit": {"2000"}}
-			if out.grep != "" {
-				query.Set("grep", out.grep)
-			}
-			page, err := a.printLogs(c, id, query, out)
-			if err != nil {
-				var refused *platform.APIError
-				if errors.As(err, &refused) && refused.Status >= 400 && refused.Status < 500 {
-					return err
-				}
-				fmt.Fprintln(a.stderr, "cw:", err, "— retrying")
-				break
-			}
-			cursor = page.Cursor
-			if !page.Truncated {
-				break
-			}
+		pause = followInterval
+		var err error
+		cursor, err = a.catchUp(c, id, cursor, out)
+		var refused *platform.APIError
+		switch {
+		case err == nil:
+		case errors.As(err, &refused) && refused.Status == http.StatusTooManyRequests:
+			// The platform's rate limit: wait as long as it says, then follow on.
+			pause = max(refused.RetryAfter, followInterval)
+			fmt.Fprintln(a.stderr, "cw:", err, "— waiting, then following on")
+		case errors.As(err, &refused) && refused.Status >= 400 && refused.Status < 500:
+			return err
+		default:
+			fmt.Fprintln(a.stderr, "cw:", err, "— retrying")
+		}
+	}
+}
+
+// catchUp prints every line after cursor, page by page, and returns the cursor it reached.
+func (a *App) catchUp(c *platform.Client, id, cursor string, out logOutput) (string, error) {
+	for {
+		query := url.Values{"after": {cursor}, "limit": {"2000"}}
+		if out.grep != "" {
+			query.Set("grep", out.grep)
+		}
+		page, err := a.printLogs(c, id, query, out)
+		if err != nil {
+			return cursor, err
+		}
+		cursor = page.Cursor
+		if !page.Truncated {
+			return cursor, nil
 		}
 	}
 }

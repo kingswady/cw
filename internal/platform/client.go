@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -26,6 +27,8 @@ type APIError struct {
 	Status  int
 	Code    string
 	Message string
+	// RetryAfter is how long a rate-limited caller should wait (Retry-After), else 0.
+	RetryAfter time.Duration
 }
 
 func (e *APIError) Error() string {
@@ -97,7 +100,10 @@ func (c *Client) Get(path string, query url.Values) (json.RawMessage, error) {
 		}
 	}
 	if envelope.Error != nil {
-		return nil, &APIError{Status: resp.StatusCode, Code: envelope.Error.Code, Message: envelope.Error.Message}
+		return nil, &APIError{
+			Status: resp.StatusCode, Code: envelope.Error.Code, Message: envelope.Error.Message,
+			RetryAfter: retryAfter(resp),
+		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{Status: resp.StatusCode, Code: "http_error", Message: fmt.Sprintf("HTTP %d from %s", resp.StatusCode, c.Base)}
@@ -119,4 +125,13 @@ func redirectPath(resp *http.Response) string {
 		return "another page"
 	}
 	return target.Path
+}
+
+// retryAfter reads a Retry-After of whole seconds (the platform sends no dates).
+func retryAfter(resp *http.Response) time.Duration {
+	seconds, err := strconv.Atoi(resp.Header.Get("Retry-After"))
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
