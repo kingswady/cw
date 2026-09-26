@@ -54,6 +54,18 @@ cw runs show 4812                # steps, and why a failed step failed
 Every read command takes `--json` (the API's own response, for `jq`), `--namespace <code>`, `--limit` and
 `--offset`. A token never sees more than its namespaces and your own access, whatever you ask for.
 
+## Logs
+
+```bash
+cw logs shop                         # the newest 200 lines of the last hour
+cw logs shop --since 15m --grep ERROR
+cw logs shop --limit 2000            # up to 2 000 lines, up to a day back
+cw logs shop --follow                # keep printing new lines (Ctrl-C to stop)
+```
+
+The app's Odoo log, from the platform's log store — only that app's lines, secrets masked. `--grep` matches
+text, any case. The token needs **Logs** in what it can read.
+
 ## In CI
 
 ```bash

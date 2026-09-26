@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -75,6 +76,8 @@ func newHarness(t *testing.T, server *httptest.Server) *harness {
 		configDir:  t.TempDir(),
 		secrets:    memoryStore{},
 		httpClient: newHTTPClient(),
+		interrupt:  func() (context.Context, func()) { return context.WithCancel(context.Background()) },
+		wait:       func(ctx context.Context, _ time.Duration) bool { return ctx.Err() == nil },
 	}
 	return h
 }
@@ -380,5 +383,73 @@ func TestTheLoginPromptSaysWhereTheURLCameFrom(t *testing.T) {
 				t.Errorf("prompt %q, want %q", prompted, c.want)
 			}
 		})
+	}
+}
+
+func logAnswer(cursor string, lines ...string) map[string]any {
+	items := make([]map[string]any, len(lines))
+	for i, line := range lines {
+		items[i] = map[string]any{"time": "2026-09-26T10:00:00.000000001Z", "line": line}
+	}
+	return map[string]any{"items": items, "cursor": cursor, "truncated": false}
+}
+
+func TestLogsPrintsTheLinesOfTheNamedApp(t *testing.T) {
+	server := fakeAPI(t, map[string]any{
+		"/apps": apps,
+		"/apps/7/logs?grep=ERROR&limit=50&since=15m": logAnswer("9", "first ERROR", "second ERROR"),
+	})
+	h := newHarness(t, server)
+	if code := h.run("logs", "shop", "--since", "15m", "--grep", "ERROR", "--limit", "50"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	if h.stdout.String() != "first ERROR\nsecond ERROR\n" {
+		t.Errorf("stdout %q", h.stdout)
+	}
+}
+
+func TestLogsFollowAsksForLinesAfterTheCursor(t *testing.T) {
+	var afters []string
+	ctx, cancel := context.WithCancel(context.Background())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		after := r.URL.Query().Get("after")
+		afters = append(afters, after)
+		answer := map[string]any{"": logAnswer("100", "old line"), "100": logAnswer("101", "new line")}[after]
+		if after == "101" {
+			cancel() // the user pressed Ctrl-C
+			answer = logAnswer("101")
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": answer})
+	}))
+	t.Cleanup(server.Close)
+	h := newHarness(t, server)
+	h.app.interrupt = func() (context.Context, func()) { return ctx, cancel }
+	if code := h.run("logs", "7", "--follow"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	if h.stdout.String() != "old line\nnew line\n" {
+		t.Errorf("stdout %q", h.stdout)
+	}
+	if strings.Join(afters, ",") != ",100,101" {
+		t.Errorf("after cursors %q", afters)
+	}
+}
+
+func TestLogsThatAreNotCollectedSaySo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte(`{"error":{"code":"unavailable","message":"This app's logs are not collected"}}`))
+	}))
+	t.Cleanup(server.Close)
+	h := newHarness(t, server)
+	if code := h.run("logs", "7"); code != 1 || !strings.Contains(h.stderr.String(), "not collected") {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+}
+
+func TestLogsNeedsOneApp(t *testing.T) {
+	h := newHarness(t, fakeAPI(t, nil))
+	if code := h.run("logs"); code != 2 {
+		t.Fatalf("exit %d", code)
 	}
 }

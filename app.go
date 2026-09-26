@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,6 +25,9 @@ type app struct {
 	httpClient *http.Client
 	// readSecret prompts for the token without echo; nil when stdin is not a terminal.
 	readSecret func(prompt string) (string, error)
+	// interrupt and wait pace --follow; tests replace them.
+	interrupt func() (context.Context, func())
+	wait      func(ctx context.Context, d time.Duration) bool
 }
 
 func newApp() *app {
@@ -40,6 +44,8 @@ func newApp() *app {
 		configDir:  dir,
 		secrets:    keychainStore{fallback: fileStore{path: filepath.Join(dir, "credentials.json")}},
 		httpClient: newHTTPClient(),
+		interrupt:  signalContext,
+		wait:       sleepOrDone,
 	}
 	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
 		a.readSecret = func(prompt string) (string, error) {
@@ -91,6 +97,8 @@ func (a *app) run(args []string) int {
 		return a.exit(a.logout(rest))
 	case "whoami":
 		return a.exit(a.whoami(rest))
+	case "logs":
+		return a.exit(a.logs(rest))
 	}
 	if res := resourceNamed(name); res != nil {
 		return a.exit(a.resource(res, rest))
@@ -132,6 +140,7 @@ Read
   installers   List installed services    cw installers show <id|name>
   backups      List backups               cw backups show <id>
   runs         List recent runs           cw runs show <id>
+  logs         An app's Odoo log          cw logs <app> [--since 1h] [--grep …] [--follow]
 
 Flags on every read command
   --json              Print the API response as JSON
