@@ -7,7 +7,7 @@ DOCKER_GO := docker run --rm -v "$(CURDIR)":/src -w /src -e GOFLAGS=-buildvcs=fa
 
 .PHONY: build test dist docker-test docker-dist
 build:
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/cw .
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/cw ./cmd/cw
 
 test:
 	test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
@@ -18,7 +18,7 @@ dist:
 	@for platform in $(PLATFORMS); do \
 		os=$${platform%/*}; arch=$${platform#*/}; ext=; [ $$os = windows ] && ext=.exe; \
 		echo "dist/cw_$${os}_$${arch}$$ext"; \
-		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags "$(LDFLAGS)" -o dist/cw_$${os}_$${arch}$$ext . || exit 1; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags "$(LDFLAGS)" -o dist/cw_$${os}_$${arch}$$ext ./cmd/cw || exit 1; \
 	done
 
 docker-test:

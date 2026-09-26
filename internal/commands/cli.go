@@ -1,4 +1,7 @@
-package main
+// Package commands is the cw command line: each command, and the dispatch,
+// flags, exit codes and hints around them. It uses the layers below it —
+// platform, config, output, mcpbridge, selfupdate — and nothing uses it but cmd/cw.
+package commands
 
 import (
 	"context"
@@ -8,20 +11,27 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"time"
 
 	"golang.org/x/term"
+
+	"github.com/kingswady/cw/internal/config"
+	"github.com/kingswady/cw/internal/platform"
+	"github.com/kingswady/cw/internal/selfupdate"
 )
 
-// app holds everything a command touches, so tests can swap each piece.
-type app struct {
+// App holds everything a command touches, so tests can swap each piece.
+type App struct {
+	// version is this build's (set by the release; "dev" otherwise).
+	version    string
 	stdin      io.Reader
 	stdout     io.Writer
 	stderr     io.Writer
 	getenv     func(string) string
 	configDir  string
-	secrets    secretStore
+	secrets    config.SecretStore
 	httpClient *http.Client
 	// readSecret prompts for the token without echo; nil when stdin is not a terminal.
 	readSecret func(prompt string) (string, error)
@@ -33,31 +43,33 @@ type app struct {
 	// executable is the file cw update replaces.
 	executable func() (string, error)
 	// current is the client the command used, for its token's expiry.
-	current *client
+	current *platform.Client
 	// now is swapped in tests.
 	clock func() time.Time
 }
 
-func newApp() *app {
+// New is cw as the terminal runs it: this machine's config, keychain and streams.
+func New(version string) *App {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		dir = "."
 	}
 	dir = filepath.Join(dir, "cw")
-	a := &app{
+	a := &App{
+		version:    version,
 		stdin:      os.Stdin,
 		stdout:     os.Stdout,
 		stderr:     os.Stderr,
 		getenv:     os.Getenv,
 		configDir:  dir,
-		secrets:    keychainStore{fallback: fileStore{path: filepath.Join(dir, "credentials.json")}},
-		httpClient: newHTTPClient(),
+		secrets:    config.KeychainStore{Fallback: config.FileStore{Path: filepath.Join(dir, "credentials.json")}},
+		httpClient: platform.NewHTTPClient(),
 		interrupt:  signalContext,
 		wait:       sleepOrDone,
 		stdoutIsTerminal: func() bool {
 			return term.IsTerminal(int(os.Stdout.Fd()))
 		},
-		executable: executablePath,
+		executable: selfupdate.ExecutablePath,
 		clock:      time.Now,
 	}
 	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
@@ -71,15 +83,49 @@ func newApp() *app {
 	return a
 }
 
-// newHTTPClient never follows a redirect: the token goes to the URL given and
-// nowhere else, and a redirect (to a login page, say) is never the API.
-func newHTTPClient() *http.Client {
-	return &http.Client{
-		Timeout: 30 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+func (a *App) userAgent() string { return "cw/" + a.version }
+
+func (a *App) loadConfig() config.Config          { return config.Load(a.configDir) }
+func (a *App) saveConfig(cfg config.Config) error { return config.Save(a.configDir, cfg) }
+
+// platform is the platform to talk to and where that came from; a URL the
+// user got wrong is a command-line mistake.
+func (a *App) platform(explicit string) (string, string, error) {
+	base, source, err := config.Resolve(explicit, a.getenv, a.configDir)
+	if err != nil {
+		return "", "", usagef("%v", err)
 	}
+	return base, source, nil
+}
+
+func (a *App) baseURL(explicit string) (string, error) {
+	base, _, err := a.platform(explicit)
+	return base, err
+}
+
+// normalizeURL is platform.NormalizeURL with a wrong URL as a command-line mistake.
+func normalizeURL(raw string) (string, error) {
+	base, err := platform.NormalizeURL(raw)
+	if err != nil {
+		return "", usagef("%v", err)
+	}
+	return base, nil
+}
+
+// client builds an authenticated client from CW_TOKEN or the saved token.
+func (a *App) client() (*platform.Client, error) {
+	base, err := a.baseURL("")
+	if err != nil {
+		return nil, err
+	}
+	token := a.getenv("CW_TOKEN")
+	if token == "" {
+		if token, err = a.secrets.Get(base); err != nil {
+			return nil, fmt.Errorf("not logged in to %s — run: cw login", base)
+		}
+	}
+	a.current = &platform.Client{Base: base, Token: token, HTTP: a.httpClient, UserAgent: a.userAgent()}
+	return a.current, nil
 }
 
 // usageError is a mistake on the command line: exit code 2, not 1.
@@ -91,7 +137,8 @@ func usagef(format string, args ...any) error {
 	return &usageError{msg: fmt.Sprintf(format, args...)}
 }
 
-func (a *app) run(args []string) int {
+// Run runs one command line and returns its exit code.
+func (a *App) Run(args []string) int {
 	if len(args) == 0 {
 		a.usage(a.stderr)
 		return 2
@@ -102,13 +149,13 @@ func (a *app) run(args []string) int {
 	return code
 }
 
-func (a *app) dispatch(name string, rest []string) int {
+func (a *App) dispatch(name string, rest []string) int {
 	switch name {
 	case "help", "-h", "--help":
 		a.usage(a.stdout)
 		return 0
 	case "version", "--version":
-		fmt.Fprintln(a.stdout, "cw", version)
+		fmt.Fprintln(a.stdout, "cw", a.version)
 		return 0
 	case "login":
 		return a.exit(a.login(rest))
@@ -135,15 +182,15 @@ func (a *app) dispatch(name string, rest []string) int {
 	return 2
 }
 
-func (a *app) exit(err error) int {
+func (a *App) exit(err error) int {
 	var usage *usageError
-	var refused *apiError
+	var refused *platform.APIError
 	switch {
 	case err == nil, errors.Is(err, flag.ErrHelp):
 		return 0
 	case errors.Is(err, errNeedsAttention):
 		return exitAttention
-	case errors.As(err, &usage), errors.As(err, &refused) && refused.status == http.StatusBadRequest:
+	case errors.As(err, &usage), errors.As(err, &refused) && refused.Status == http.StatusBadRequest:
 		// A 400 is the platform saying the command line was wrong (--limit 0).
 		fmt.Fprintln(a.stderr, "cw:", err)
 		return 2
@@ -153,7 +200,7 @@ func (a *app) exit(err error) int {
 	}
 }
 
-func (a *app) usage(w io.Writer) {
+func (a *App) usage(w io.Writer) {
 	fmt.Fprint(w, `cw reads your apps, servers, backups and runs from the terminal.
 
 Usage: cw <command> [flags]
@@ -184,7 +231,7 @@ Flags on every read command
   --offset <n>        Rows to skip
 
 Environment
-  CW_URL     Platform URL (default `+defaultURL+`)
+  CW_URL     Platform URL (default `+config.DefaultURL+`)
   CW_TOKEN   API token; overrides the saved one (for CI)
 
 Run "cw <command> --help" for a command's own flags.
@@ -192,7 +239,7 @@ Run "cw <command> --help" for a command's own flags.
 }
 
 // newFlags is a flag set that reports to stderr and returns errors instead of exiting.
-func (a *app) newFlags(name string) *flag.FlagSet {
+func (a *App) newFlags(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet("cw "+name, flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
 	return fs
@@ -212,5 +259,36 @@ func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 		}
 		positional = append(positional, args[0])
 		args = args[1:]
+	}
+}
+
+// useColor decides --color: auto colours a terminal unless NO_COLOR is set
+// (https://no-color.org); JSON is never coloured.
+func (a *App) useColor(mode string, asJSON bool) (bool, error) {
+	switch mode {
+	case "always":
+		return !asJSON, nil
+	case "never":
+		return false, nil
+	case "auto":
+		return !asJSON && a.getenv("NO_COLOR") == "" && a.stdoutIsTerminal(), nil
+	}
+	return false, usagef("--color is auto, always or never, not %q", mode)
+}
+
+// signalContext ends on Ctrl-C.
+func signalContext() (context.Context, func()) {
+	return signal.NotifyContext(context.Background(), os.Interrupt)
+}
+
+// sleepOrDone waits d; false when ctx ended first.
+func sleepOrDone(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }

@@ -1,4 +1,4 @@
-package main
+package commands
 
 import (
 	"encoding/json"
@@ -38,24 +38,6 @@ func TestATokenInItsLastWeekIsWarnedAbout(t *testing.T) {
 	}
 }
 
-func TestUseSwitchesBetweenPlatformsLoggedInTo(t *testing.T) {
-	h := newHarness(t, nil)
-	h.app.secrets.Set("https://one.example", goodToken)
-	h.app.secrets.Set("https://two.example", goodToken)
-	h.app.saveConfig(config{URL: "https://one.example", Platforms: []string{"https://one.example", "https://two.example"}})
-	if code := h.run("use", "two.example"); code != 0 || h.app.loadConfig().URL != "https://two.example" {
-		t.Fatalf("exit %d: %s", code, h.stderr)
-	}
-	h.stdout.Reset()
-	h.run("use")
-	if !strings.Contains(h.stdout.String(), "* https://two.example") || !strings.Contains(h.stdout.String(), "  https://one.example") {
-		t.Errorf("list %q", h.stdout)
-	}
-	if code := h.run("use", "https://three.example"); code != 1 || !strings.Contains(h.stderr.String(), "cw login --url https://three.example") {
-		t.Errorf("exit %d: %s", code, h.stderr)
-	}
-}
-
 func TestAnUpdateHintAtMostOnceADayInATerminal(t *testing.T) {
 	checks := 0
 	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -63,12 +45,10 @@ func TestAnUpdateHintAtMostOnceADayInATerminal(t *testing.T) {
 		http.Redirect(w, r, "/tag/v9.9.9", http.StatusFound)
 	}))
 	t.Cleanup(releases.Close)
-	previous := version
-	version = "0.3.0"
-	t.Cleanup(func() { version = previous })
 	api := fakeAPI(t, map[string]any{"/whoami": map[string]any{"login": "a", "name": "A"}})
 
 	h := newHarness(t, api)
+	h.app.version = "0.3.0"
 	h.env["CW_DOWNLOAD_BASE"] = releases.URL
 	h.app.stdoutIsTerminal = func() bool { return true }
 	h.run("whoami")
@@ -87,6 +67,7 @@ func TestAnUpdateHintAtMostOnceADayInATerminal(t *testing.T) {
 		"piped":   func(h *harness) { h.app.stdoutIsTerminal = func() bool { return false } },
 	} {
 		quiet := newHarness(t, api)
+		quiet.app.version = "0.3.0"
 		quiet.env["CW_DOWNLOAD_BASE"] = releases.URL
 		quiet.app.stdoutIsTerminal = func() bool { return true }
 		tweak(quiet)

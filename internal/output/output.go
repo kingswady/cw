@@ -1,4 +1,5 @@
-package main
+// Package output is how cw prints: aligned tables, colours, JSON and times.
+package output
 
 import (
 	"bytes"
@@ -17,7 +18,7 @@ const legacyTime = "2006-01-02 15:04:05"
 // now is swapped in tests.
 var now = time.Now
 
-func writeJSON(w io.Writer, raw json.RawMessage) error {
+func WriteJSON(w io.Writer, raw json.RawMessage) error {
 	var out bytes.Buffer
 	if err := json.Indent(&out, raw, "", "  "); err != nil {
 		return err
@@ -37,7 +38,7 @@ func visibleWidth(s string) int {
 
 // writeTable aligns rows under headers by visible width (text/tabwriter would
 // count colour codes as characters); nil headers print rows only.
-func writeTable(w io.Writer, headers []string, rows [][]string) error {
+func WriteTable(w io.Writer, headers []string, rows [][]string) error {
 	all := rows
 	if headers != nil {
 		all = append([][]string{headers}, rows...)
@@ -67,7 +68,7 @@ func writeTable(w io.Writer, headers []string, rows [][]string) error {
 }
 
 // text renders one JSON value for a cell: null and "" read as "-".
-func text(value any) string {
+func Text(value any) string {
 	switch v := value.(type) {
 	case nil:
 		return "-"
@@ -88,7 +89,7 @@ func text(value any) string {
 	}
 }
 
-func parseServerTime(value any) (time.Time, bool) {
+func ParseTime(value any) (time.Time, bool) {
 	s, ok := value.(string)
 	if !ok || s == "" {
 		return time.Time{}, false
@@ -100,18 +101,18 @@ func parseServerTime(value any) (time.Time, bool) {
 	return t, err == nil
 }
 
-// localTime is the absolute time in this machine's zone.
-func localTime(value any) string {
-	t, ok := parseServerTime(value)
+// LocalTime is the absolute time in this machine's zone.
+func LocalTime(value any) string {
+	t, ok := ParseTime(value)
 	if !ok {
 		return "-"
 	}
 	return t.Local().Format("2006-01-02 15:04")
 }
 
-// ago is a short relative time for table cells.
-func ago(value any) string {
-	t, ok := parseServerTime(value)
+// Ago is a short relative time for table cells.
+func Ago(value any) string {
+	t, ok := ParseTime(value)
 	if !ok {
 		return "-"
 	}
@@ -132,7 +133,7 @@ func ago(value any) string {
 	}
 }
 
-func megabytes(value any) string {
+func Megabytes(value any) string {
 	n, ok := value.(json.Number)
 	if !ok {
 		return "-"

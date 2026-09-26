@@ -18,7 +18,8 @@ Your platform serves the same script at its own address, and then tells you the 
 
 Windows: download `cw_windows_amd64.zip` from the [releases](https://github.com/kingswady/cw/releases).
 
-From source (Go 1.26+, or Docker): `make build` → `bin/cw`; `make docker-dist` builds every platform.
+From source (Go 1.26+, or Docker): `make build` → `bin/cw`; `make docker-dist` builds every platform. How the code is laid out:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Update
 

@@ -1,10 +1,14 @@
-package main
+package commands
 
 import (
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/kingswady/cw/internal/config"
+	"github.com/kingswady/cw/internal/output"
+	"github.com/kingswady/cw/internal/platform"
 )
 
 const tokenPrefix = "cwk_"
@@ -19,9 +23,9 @@ type whoamiData struct {
 	} `json:"namespaces"`
 }
 
-func (a *app) login(args []string) error {
+func (a *App) login(args []string) error {
 	fs := a.newFlags("login")
-	urlFlag := fs.String("url", "", "platform URL (default "+defaultURL+")")
+	urlFlag := fs.String("url", "", "platform URL (default "+config.DefaultURL+")")
 	withToken := fs.Bool("with-token", false, "read the token from standard input")
 	if _, err := parseArgs(fs, args); err != nil {
 		return err
@@ -37,7 +41,7 @@ func (a *app) login(args []string) error {
 	if !strings.HasPrefix(token, tokenPrefix) {
 		return usagef("that is not an API token — they start with %s (create one in My Settings → API Tokens)", tokenPrefix)
 	}
-	me, err := checkToken(&client{base: base, token: token, http: a.httpClient})
+	me, err := checkToken(&platform.Client{Base: base, Token: token, HTTP: a.httpClient, UserAgent: a.userAgent()})
 	if err != nil {
 		return err
 	}
@@ -47,7 +51,7 @@ func (a *app) login(args []string) error {
 	}
 	cfg := a.loadConfig()
 	cfg.URL = base
-	cfg.remember(base)
+	cfg.Remember(base)
 	if err := a.saveConfig(cfg); err != nil {
 		return fmt.Errorf("saving the config: %w", err)
 	}
@@ -61,24 +65,24 @@ func (a *app) login(args []string) error {
 }
 
 // checkToken asks /whoami; a token without that function is still a valid token.
-func checkToken(c *client) (*whoamiData, error) {
-	raw, err := c.get("/whoami", nil)
-	var refused *apiError
-	if errors.As(err, &refused) && refused.code == "function_not_allowed" {
+func checkToken(c *platform.Client) (*whoamiData, error) {
+	raw, err := c.Get("/whoami", nil)
+	var refused *platform.APIError
+	if errors.As(err, &refused) && refused.Code == "function_not_allowed" {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	var me whoamiData
-	if err := decode(raw, &me); err != nil {
+	if err := platform.Decode(raw, &me); err != nil {
 		return nil, err
 	}
 	return &me, nil
 }
 
 // readToken asks for the token; target is the platform as the prompt names it.
-func (a *app) readToken(target string, fromStdin bool) (string, error) {
+func (a *App) readToken(target string, fromStdin bool) (string, error) {
 	if fromStdin || a.readSecret == nil {
 		raw, err := io.ReadAll(io.LimitReader(a.stdin, 4096))
 		return strings.TrimSpace(string(raw)), err
@@ -89,7 +93,7 @@ func (a *app) readToken(target string, fromStdin bool) (string, error) {
 	return strings.TrimSpace(token), err
 }
 
-func (a *app) logout(args []string) error {
+func (a *App) logout(args []string) error {
 	fs := a.newFlags("logout")
 	if _, err := parseArgs(fs, args); err != nil {
 		return err
@@ -102,7 +106,7 @@ func (a *app) logout(args []string) error {
 		return err
 	}
 	cfg := a.loadConfig()
-	cfg.forget(base)
+	cfg.Forget(base)
 	if err := a.saveConfig(cfg); err != nil {
 		return err
 	}
@@ -110,7 +114,7 @@ func (a *app) logout(args []string) error {
 	return nil
 }
 
-func (a *app) whoami(args []string) error {
+func (a *App) whoami(args []string) error {
 	fs := a.newFlags("whoami")
 	asJSON := fs.Bool("json", false, "print the API response as JSON")
 	colorMode := fs.String("color", "auto", "auto (in a terminal, unless NO_COLOR is set), always or never")
@@ -125,25 +129,78 @@ func (a *app) whoami(args []string) error {
 	if err != nil {
 		return err
 	}
-	raw, err := c.get("/whoami", nil)
+	raw, err := c.Get("/whoami", nil)
 	if err != nil {
 		return err
 	}
 	if *asJSON {
-		return writeJSON(a.stdout, raw)
+		return output.WriteJSON(a.stdout, raw)
 	}
 	var me whoamiData
-	if err := decode(raw, &me); err != nil {
+	if err := platform.Decode(raw, &me); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "%s (%s) on %s\n", me.Name, me.Login, c.base)
-	if expires, ok := parseServerTime(c.tokenExpires); ok {
-		fmt.Fprintf(a.stdout, "Token expires %s (%s)\n", expires.Local().Format("2006-01-02 15:04"), untilText(a.clock(), expires))
+	fmt.Fprintf(a.stdout, "%s (%s) on %s\n", me.Name, me.Login, c.Base)
+	if expires, ok := output.ParseTime(c.TokenExpires); ok {
+		fmt.Fprintf(a.stdout, "Token expires %s (%s)\n", expires.Local().Format("2006-01-02 15:04"), output.Until(a.clock(), expires))
 	}
 	fmt.Fprintln(a.stdout)
 	rows := make([][]string, 0, len(me.Namespaces))
 	for _, ns := range me.Namespaces {
 		rows = append(rows, []string{ns.Name, ns.Code, ns.Level})
 	}
-	return writeTable(a.stdout, tableOutput{color: color}.headers([]string{"NAMESPACE", "CODE", "LEVEL"}), rows)
+	return output.WriteTable(a.stdout, output.Table{Color: color}.Headers([]string{"NAMESPACE", "CODE", "LEVEL"}), rows)
+}
+
+// use switches the saved platform to one logged in to before.
+func (a *App) use(args []string) error {
+	fs := a.newFlags("use")
+	positional, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	cfg := a.loadConfig()
+	if len(positional) == 0 {
+		current, _ := a.baseURL("")
+		if len(cfg.Platforms) == 0 {
+			fmt.Fprintf(a.stdout, "Using %s. Log in to another with: cw login --url <address>\n", current)
+			return nil
+		}
+		for _, known := range cfg.Platforms {
+			marker := "  "
+			if known == current {
+				marker = "* "
+			}
+			fmt.Fprintln(a.stdout, marker+known)
+		}
+		return nil
+	}
+	if len(positional) != 1 {
+		return usagef("usage: cw use [<platform address>]")
+	}
+	base, err := normalizeURL(positional[0])
+	if err != nil {
+		return err
+	}
+	if _, err := a.secrets.Get(base); err != nil {
+		return fmt.Errorf("not logged in to %s — run: cw login --url %s", base, base)
+	}
+	cfg.URL = base
+	cfg.Remember(base)
+	if err := a.saveConfig(cfg); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "Now using %s.\n", base)
+	return nil
+}
+
+// platformNote explains a URL the user did not type on this command line.
+func platformNote(source string) string {
+	switch source {
+	case config.FromEnv:
+		return " (from CW_URL)"
+	case config.FromSaved:
+		return " (your last platform — use --url for another)"
+	}
+	return ""
 }

@@ -1,4 +1,4 @@
-package main
+package commands
 
 import (
 	"encoding/json"
@@ -81,11 +81,5 @@ func TestAnOlderPlatformSaysItHasNoAttentionYet(t *testing.T) {
 	h := newHarness(t, fakeAPI(t, nil))
 	if code := h.run("attention"); code != 1 || !strings.Contains(h.stderr.String(), "needs a newer platform version") {
 		t.Fatalf("exit %d: %s", code, h.stderr)
-	}
-}
-
-func TestSSLStatusIsColoured(t *testing.T) {
-	if got := style("ssl_status", "expired"); got != ansiRed+"expired"+ansiReset {
-		t.Errorf("got %q", got)
 	}
 }

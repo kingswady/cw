@@ -1,16 +1,16 @@
-package main
+package commands
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
-	"os/signal"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kingswady/cw/internal/output"
+	"github.com/kingswady/cw/internal/platform"
 )
 
 // followInterval is how often --follow asks for newer lines.
@@ -25,7 +25,7 @@ type logPage struct {
 	Truncated bool   `json:"truncated"`
 }
 
-func (a *app) logs(args []string) error {
+func (a *App) logs(args []string) error {
 	fs := a.newFlags("logs")
 	since := fs.String("since", "1h", "how far back: 30s, 15m, 1h … 24h")
 	grep := fs.String("grep", "", "only lines containing this text (any case)")
@@ -79,7 +79,7 @@ func (a *app) logs(args []string) error {
 // followLogs asks for lines after the cursor until interrupted. A refusal
 // that will not heal (token, access, app gone) ends it; anything else is
 // reported and retried.
-func (a *app) followLogs(c *client, id, cursor string, out logOutput) error {
+func (a *App) followLogs(c *platform.Client, id, cursor string, out logOutput) error {
 	ctx, stop := a.interrupt()
 	defer stop()
 	for {
@@ -93,8 +93,8 @@ func (a *app) followLogs(c *client, id, cursor string, out logOutput) error {
 			}
 			page, err := a.printLogs(c, id, query, out)
 			if err != nil {
-				var refused *apiError
-				if errors.As(err, &refused) && refused.status >= 400 && refused.status < 500 {
+				var refused *platform.APIError
+				if errors.As(err, &refused) && refused.Status >= 400 && refused.Status < 500 {
 					return err
 				}
 				fmt.Fprintln(a.stderr, "cw:", err, "— retrying")
@@ -115,9 +115,9 @@ type logOutput struct {
 	grep  string
 }
 
-func (a *app) printLogs(c *client, id string, query url.Values, out logOutput) (logPage, error) {
+func (a *App) printLogs(c *platform.Client, id string, query url.Values, out logOutput) (logPage, error) {
 	var page logPage
-	raw, err := c.get("/apps/"+id+"/logs", query)
+	raw, err := c.Get("/apps/"+id+"/logs", query)
 	if err != nil {
 		return page, err
 	}
@@ -125,45 +125,14 @@ func (a *app) printLogs(c *client, id string, query url.Values, out logOutput) (
 		return page, err
 	}
 	if out.json {
-		return page, writeJSON(a.stdout, raw)
+		return page, output.WriteJSON(a.stdout, raw)
 	}
 	for _, item := range page.Items {
 		line := strings.TrimRight(item.Line, "\n ")
 		if out.color {
-			line = colorize(line, out.grep)
+			line = output.Colorize(line, out.grep)
 		}
 		fmt.Fprintln(a.stdout, line)
 	}
 	return page, nil
-}
-
-// useColor decides --color: auto colours a terminal unless NO_COLOR is set
-// (https://no-color.org); JSON is never coloured.
-func (a *app) useColor(mode string, asJSON bool) (bool, error) {
-	switch mode {
-	case "always":
-		return !asJSON, nil
-	case "never":
-		return false, nil
-	case "auto":
-		return !asJSON && a.getenv("NO_COLOR") == "" && a.stdoutIsTerminal(), nil
-	}
-	return false, usagef("--color is auto, always or never, not %q", mode)
-}
-
-// signalContext ends on Ctrl-C.
-func signalContext() (context.Context, func()) {
-	return signal.NotifyContext(context.Background(), os.Interrupt)
-}
-
-// sleepOrDone waits d; false when ctx ended first.
-func sleepOrDone(ctx context.Context, d time.Duration) bool {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
 }

@@ -1,4 +1,6 @@
-package main
+// Package selfupdate replaces the running cw with a release: found through the
+// releases/latest redirect, checked against checksums.txt, swapped in atomically.
+package selfupdate
 
 import (
 	"archive/tar"
@@ -18,64 +20,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kingswady/cw/internal/platform"
 )
 
 const (
-	defaultReleases = "https://github.com/kingswady/cw/releases"
+	DefaultReleases = "https://github.com/kingswady/cw/releases"
 	maxDownload     = 64 << 20 // an archive is a few MB; anything this large is wrong
 )
-
-func (a *app) update(args []string) error {
-	fs := a.newFlags("update")
-	check := fs.Bool("check", false, "only say whether a newer release exists")
-	want := fs.String("version", "", "install this release (e.g. v0.3.0) instead of the latest")
-	force := fs.Bool("force", false, "update even a development build, or reinstall the same version")
-	if _, err := parseArgs(fs, args); err != nil {
-		return err
-	}
-	if version == "dev" && !*force {
-		return usagef("this is a development build — use --force to replace it with a release")
-	}
-	target, err := a.executable()
-	if err != nil {
-		return fmt.Errorf("cannot find this program's file: %w", err)
-	}
-	if strings.Contains(target, "/Cellar/") {
-		return fmt.Errorf("cw was installed with Homebrew — update it with: brew upgrade cw")
-	}
-	releases := strings.TrimRight(a.releases(), "/")
-	tag := *want
-	if tag == "" {
-		if tag, err = latestTag(releases); err != nil {
-			return err
-		}
-	}
-	current := "v" + strings.TrimPrefix(version, "v")
-	if !*force && !newer(tag, current) {
-		fmt.Fprintf(a.stdout, "cw is up to date (%s).\n", current)
-		return nil
-	}
-	if *check {
-		fmt.Fprintf(a.stdout, "cw %s is available (this is %s) — run: cw update\n", tag, current)
-		return nil
-	}
-	binary, err := fetchRelease(releases, tag)
-	if err != nil {
-		return err
-	}
-	if err := replaceExecutable(target, binary); err != nil {
-		return err
-	}
-	fmt.Fprintf(a.stdout, "Updated cw %s → %s (%s)\n", current, tag, target)
-	return nil
-}
 
 // downloadClient follows the redirects GitHub serves release files through,
 // but only to https.
 var downloadClient = &http.Client{
 	Timeout: 5 * time.Minute,
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if req.URL.Scheme != "https" && !isLoopback(req.URL.Hostname()) {
+		if req.URL.Scheme != "https" && !platform.IsLoopback(req.URL.Hostname()) {
 			return fmt.Errorf("refusing to follow a redirect to %s", req.URL)
 		}
 		if len(via) > 5 {
@@ -85,13 +44,13 @@ var downloadClient = &http.Client{
 	},
 }
 
-// latestTag reads the tag from the releases/latest redirect — no API call, so
+// LatestTag reads the tag from the releases/latest redirect — no API call, so
 // no rate limit.
-func latestTag(releases string) (string, error) {
-	return latestTagWith(newHTTPClient(), releases)
+func LatestTag(releases string) (string, error) {
+	return LatestTagWith(platform.NewHTTPClient(), releases)
 }
 
-func latestTagWith(httpClient *http.Client, releases string) (string, error) {
+func LatestTagWith(httpClient *http.Client, releases string) (string, error) {
 	resp, err := httpClient.Get(strings.TrimRight(releases, "/") + "/latest")
 	if err != nil {
 		return "", fmt.Errorf("cannot reach %s: %w", releases, err)
@@ -121,9 +80,9 @@ func download(url string) ([]byte, error) {
 	return body, err
 }
 
-// fetchRelease downloads this platform's archive of tag, checks it against
+// Fetch downloads this platform's archive of tag, checks it against
 // the release's checksums.txt and returns the cw binary inside.
-func fetchRelease(releases, tag string) ([]byte, error) {
+func Fetch(releases, tag string) ([]byte, error) {
 	name := fmt.Sprintf("cw_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 	if runtime.GOOS == "windows" {
 		name = fmt.Sprintf("cw_%s_%s.zip", runtime.GOOS, runtime.GOARCH)
@@ -200,10 +159,10 @@ func fromZip(archive []byte) ([]byte, error) {
 	return nil, fmt.Errorf("the archive holds no cw.exe")
 }
 
-// replaceExecutable swaps target for binary atomically: written beside it,
+// ReplaceExecutable swaps target for binary atomically: written beside it,
 // then renamed over it, so a failure never leaves half a program. Windows
 // cannot overwrite a running .exe, so the old one is moved aside first.
-func replaceExecutable(target string, binary []byte) error {
+func ReplaceExecutable(target string, binary []byte) error {
 	dir := filepath.Dir(target)
 	temp, err := os.CreateTemp(dir, ".cw-update-*")
 	if err != nil {
@@ -233,8 +192,8 @@ func replaceExecutable(target string, binary []byte) error {
 	return os.Rename(temp.Name(), target)
 }
 
-// newer reports whether release tag a is above b (vMAJOR.MINOR.PATCH).
-func newer(a, b string) bool {
+// Newer reports whether release tag a is above b (vMAJOR.MINOR.PATCH).
+func Newer(a, b string) bool {
 	pa, pb := semver(a), semver(b)
 	for i := range pa {
 		if pa[i] != pb[i] {
@@ -254,8 +213,8 @@ func semver(tag string) [3]int {
 	return out
 }
 
-// executablePath is this program's own file, symlinks resolved.
-func executablePath() (string, error) {
+// ExecutablePath is this program's own file, symlinks resolved.
+func ExecutablePath() (string, error) {
 	file, err := os.Executable()
 	if err != nil {
 		return "", err

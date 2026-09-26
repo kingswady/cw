@@ -1,4 +1,4 @@
-package main
+package output
 
 import (
 	"regexp"
@@ -6,15 +6,15 @@ import (
 )
 
 const (
-	ansiReset     = "\x1b[0m"
-	ansiDim       = "\x1b[2m"
-	ansiRed       = "\x1b[31m"
-	ansiGreen     = "\x1b[32m"
-	ansiYellow    = "\x1b[33m"
-	ansiCyan      = "\x1b[36m"
-	ansiReverse   = "\x1b[7m"
-	ansiReverseOf = "\x1b[27m" // ends the highlight without ending the colour around it
-	ansiBold      = "\x1b[1m"
+	Reset      = "\x1b[0m"
+	Dim        = "\x1b[2m"
+	Red        = "\x1b[31m"
+	Green      = "\x1b[32m"
+	Yellow     = "\x1b[33m"
+	Cyan       = "\x1b[36m"
+	reverse    = "\x1b[7m"
+	reverseOff = "\x1b[27m" // ends the highlight without ending the colour around it
+	Bold       = "\x1b[1m"
 )
 
 // odooLine is Odoo's log format: time, pid, level, database, logger: message.
@@ -33,10 +33,10 @@ var levelColor = map[string]string{
 }
 
 // messageColor makes the message of a problem stand out; routine lines stay plain.
-var messageColor = map[string]string{"WARNING": ansiYellow, "ERROR": ansiRed, "CRITICAL": ansiRed}
+var messageColor = map[string]string{"WARNING": Yellow, "ERROR": Red, "CRITICAL": Red}
 
 // colorize renders one log entry (it may span lines: a traceback) for a terminal.
-func colorize(entry, grep string) string {
+func Colorize(entry, grep string) string {
 	lines := strings.Split(entry, "\n")
 	match := odooLine.FindStringSubmatch(lines[0])
 	if match == nil {
@@ -48,32 +48,32 @@ func colorize(entry, grep string) string {
 		message = colorStatus(message)
 	}
 	var out strings.Builder
-	out.WriteString(ansiDim + timestamp + " " + pid + ansiReset + " ")
-	out.WriteString(levelColor[level] + level + ansiReset + " ")
-	out.WriteString(ansiCyan + db + ansiReset + " " + ansiDim + logger + ":" + ansiReset + " ")
-	out.WriteString(paint(tint, highlight(message, grep)))
+	out.WriteString(Dim + timestamp + " " + pid + Reset + " ")
+	out.WriteString(levelColor[level] + level + Reset + " ")
+	out.WriteString(Cyan + db + Reset + " " + Dim + logger + ":" + Reset + " ")
+	out.WriteString(Paint(tint, highlight(message, grep)))
 	continuation := tint
 	if continuation == "" {
-		continuation = ansiDim
+		continuation = Dim
 	}
 	for _, line := range lines[1:] {
-		out.WriteString("\n" + paint(continuation, highlight(line, grep)))
+		out.WriteString("\n" + Paint(continuation, highlight(line, grep)))
 	}
 	return out.String()
 }
 
-func paint(color, text string) string {
+func Paint(color, text string) string {
 	if color == "" || text == "" {
 		return text
 	}
-	return color + text + ansiReset
+	return color + text + Reset
 }
 
 func colorStatus(message string) string {
 	return httpStatus.ReplaceAllStringFunc(message, func(found string) string {
 		parts := httpStatus.FindStringSubmatch(found)
-		color := map[byte]string{'2': ansiGreen, '3': ansiCyan, '4': ansiYellow, '5': ansiRed}[parts[2][0]]
-		return parts[1] + paint(color, parts[2]) + parts[3]
+		color := map[byte]string{'2': Green, '3': Cyan, '4': Yellow, '5': Red}[parts[2][0]]
+		return parts[1] + Paint(color, parts[2]) + parts[3]
 	})
 }
 
@@ -93,7 +93,7 @@ func highlight(text, grep string) string {
 			out.WriteString(text)
 			return out.String()
 		}
-		out.WriteString(text[:i] + ansiReverse + text[i:i+len(needle)] + ansiReverseOf)
+		out.WriteString(text[:i] + reverse + text[i:i+len(needle)] + reverseOff)
 		text, lower = text[i+len(needle):], lower[i+len(needle):]
 	}
 }
@@ -103,52 +103,52 @@ func highlight(text, grep string) string {
 // cyan, draft grey, error red.
 var cellStyles = map[string]func(string) string{
 	"environment_type": func(v string) string {
-		return map[string]string{"production": ansiRed, "staging": ansiYellow, "development": ansiCyan}[v]
+		return map[string]string{"production": Red, "staging": Yellow, "development": Cyan}[v]
 	},
 	"state": stateColor,
 	"backup_health": func(v string) string {
-		return map[string]string{"healthy": ansiGreen, "warning": ansiYellow, "critical": ansiRed, "none": ansiDim}[v]
+		return map[string]string{"healthy": Green, "warning": Yellow, "critical": Red, "none": Dim}[v]
 	},
 	"ssl_status": func(v string) string {
-		return map[string]string{"expired": ansiRed, "error": ansiRed, "expiring_soon": ansiYellow, "unknown": ansiYellow}[v]
+		return map[string]string{"expired": Red, "error": Red, "expiring_soon": Yellow, "unknown": Yellow}[v]
 	},
 	"automated":      yesNoColor,
 	"platform_login": yesNoColor,
-	"version":        func(string) string { return ansiCyan },
+	"version":        func(string) string { return Cyan },
 }
 
 func stateColor(state string) string {
 	switch {
 	case strings.HasSuffix(state, "-queue"):
-		return ansiCyan
+		return Cyan
 	case state == "deploy" || state == "done" || state == "successful":
-		return ansiGreen
+		return Green
 	case state == "running" || state == "partial" || state == "starting" || state == "queued":
-		return ansiCyan
+		return Cyan
 	case state == "error" || state == "failed" || state == "timeout" || state == "interrupted" || state == "delete":
-		return ansiRed
+		return Red
 	case state == "draft" || state == "idle" || state == "cancel" || state == "canceled" || state == "disabled":
-		return ansiDim
+		return Dim
 	}
 	return ""
 }
 
 func yesNoColor(v string) string {
-	return map[string]string{"yes": ansiGreen, "no": ansiDim}[v]
+	return map[string]string{"yes": Green, "no": Dim}[v]
 }
 
 // style colours one cell by its column; "-" (no value) stays plain.
-func style(key, text string) string {
+func Style(key, text string) string {
 	if fn := cellStyles[key]; fn != nil && text != "-" {
-		return paint(fn(text), text)
+		return Paint(fn(text), text)
 	}
 	return text
 }
 
-func boldAll(headers []string) []string {
+func BoldAll(headers []string) []string {
 	bold := make([]string, len(headers))
 	for i, header := range headers {
-		bold[i] = paint(ansiBold, header)
+		bold[i] = Paint(Bold, header)
 	}
 	return bold
 }

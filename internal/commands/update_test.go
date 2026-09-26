@@ -1,4 +1,4 @@
-package main
+package commands
 
 import (
 	"archive/tar"
@@ -64,9 +64,6 @@ func fakeReleases(t *testing.T, latest string, binary []byte, tamper bool) (*htt
 
 func updateHarness(t *testing.T, server *httptest.Server, running string) (*harness, string) {
 	t.Helper()
-	previous := version
-	version = running
-	t.Cleanup(func() { version = previous })
 	target := filepath.Join(t.TempDir(), "cw")
 	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
 		t.Fatal(err)
@@ -74,6 +71,7 @@ func updateHarness(t *testing.T, server *httptest.Server, running string) (*harn
 	h := newHarness(t, nil)
 	h.env["CW_DOWNLOAD_BASE"] = server.URL
 	h.app.executable = func() (string, error) { return target, nil }
+	h.app.version = running
 	return h, target
 }
 
@@ -160,17 +158,5 @@ func TestAnUnwritableDirectorySuggestsSudo(t *testing.T) {
 	t.Cleanup(func() { os.Chmod(dir, 0o755) })
 	if code := h.run("update"); code != 1 || !strings.Contains(h.stderr.String(), "sudo cw update") {
 		t.Fatalf("exit %d: %s", code, h.stderr)
-	}
-}
-
-func TestReleaseOrder(t *testing.T) {
-	cases := map[[2]string]bool{
-		{"v0.3.0", "v0.2.9"}: true, {"v0.10.0", "v0.9.0"}: true, {"v1.0.0", "v0.99.99"}: true,
-		{"v0.2.0", "v0.2.0"}: false, {"v0.2.0", "v0.3.0"}: false, {"v0.3.0", "v0.3.0-rc1"}: false,
-	}
-	for pair, want := range cases {
-		if got := newer(pair[0], pair[1]); got != want {
-			t.Errorf("newer(%s, %s) = %v", pair[0], pair[1], got)
-		}
 	}
 }

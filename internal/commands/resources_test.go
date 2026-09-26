@@ -1,30 +1,14 @@
-package main
+package commands
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-)
 
-func TestColouredCellsStayAligned(t *testing.T) {
-	var out bytes.Buffer
-	rows := [][]string{{paint(ansiGreen, "deploy"), "a"}, {"error", "b"}}
-	if err := writeTable(&out, boldAll([]string{"STATE", "X"}), rows); err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	var columns []int
-	for _, line := range lines {
-		plain := ansiEscape.ReplaceAllString(line, "")
-		columns = append(columns, len(plain)-1) // the second column's single letter ends each line
-	}
-	if columns[0] != columns[1] || columns[1] != columns[2] {
-		t.Errorf("second column misaligned: %v\n%s", columns, out.String())
-	}
-}
+	"github.com/kingswady/cw/internal/output"
+)
 
 var mixedApps = map[string]any{
 	"items": []map[string]any{
@@ -43,12 +27,12 @@ func TestAppsAreColouredLikeTheDashboard(t *testing.T) {
 	}
 	out := h.stdout.String()
 	for _, want := range []string{
-		ansiBold + "ENV" + ansiReset,
-		ansiRed + "production" + ansiReset,
-		ansiCyan + "development" + ansiReset,
-		ansiGreen + "deploy" + ansiReset,
-		ansiRed + "error" + ansiReset,
-		ansiGreen + "healthy" + ansiReset,
+		output.Bold + "ENV" + output.Reset,
+		output.Red + "production" + output.Reset,
+		output.Cyan + "development" + output.Reset,
+		output.Green + "deploy" + output.Reset,
+		output.Red + "error" + output.Reset,
+		output.Green + "healthy" + output.Reset,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
@@ -149,5 +133,110 @@ func TestAppFiltersBecomeQueryParameters(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %s in %q", want, got)
 		}
+	}
+}
+
+var apps = map[string]any{
+	"items": []map[string]any{
+		{"id": 7, "name": "shop", "namespace": "acme", "environment_type": "production", "version": "19.0",
+			"state": "deploy", "server": "prod-1", "backup_health": "healthy", "updated_at": nil},
+		{"id": 8, "name": "shop-staging", "namespace": "acme", "environment_type": "staging", "version": "19.0",
+			"state": "deploy", "server": nil, "backup_health": "none", "updated_at": "2026-09-24 09:00:00"},
+	},
+	"total": 2,
+}
+
+func TestAppsTable(t *testing.T) {
+	h := newHarness(t, fakeAPI(t, map[string]any{"/apps": apps}))
+	if code := h.run("apps"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	out := h.stdout.String()
+	for _, want := range []string{"ID", "NAME", "shop-staging", "production", "prod-1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "NAMESPACE") {
+		t.Errorf("one namespace: the column is noise\n%s", out)
+	}
+}
+
+func TestShowResolvesAName(t *testing.T) {
+	server := fakeAPI(t, map[string]any{
+		"/apps":   apps,
+		"/apps/7": map[string]any{"id": 7, "name": "shop", "state": "deploy", "deployed_at": "2026-09-01 08:00:00"},
+	})
+	h := newHarness(t, server)
+	if code := h.run("apps", "show", "SHOP"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	if !strings.Contains(h.stdout.String(), "Name:") || !strings.Contains(h.stdout.String(), "shop") {
+		t.Errorf("stdout: %s", h.stdout)
+	}
+}
+
+func TestAnAmbiguousNameAsksForTheID(t *testing.T) {
+	twins := map[string]any{"items": []map[string]any{
+		{"id": 1, "name": "shop", "namespace": "a"}, {"id": 2, "name": "shop", "namespace": "b"},
+	}, "total": 2}
+	h := newHarness(t, fakeAPI(t, map[string]any{"/apps": twins}))
+	if code := h.run("apps", "show", "shop"); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(h.stderr.String(), "1 (a), 2 (b)") {
+		t.Errorf("stderr: %s", h.stderr)
+	}
+}
+
+func TestBackupsFilterByAppName(t *testing.T) {
+	server := fakeAPI(t, map[string]any{
+		"/apps": apps,
+		"/backups?app_id=7&limit=50&offset=0": map[string]any{"items": []map[string]any{
+			{"id": 3, "app": "shop", "namespace": "acme", "size_mb": 2048, "automated": true, "taken_at": "2026-09-24 01:00:00"},
+		}, "total": 1},
+	})
+	h := newHarness(t, server)
+	if code := h.run("backups", "--app", "shop"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	if !strings.Contains(h.stdout.String(), "2.0 GB") || !strings.Contains(h.stdout.String(), "yes") {
+		t.Errorf("stdout: %s", h.stdout)
+	}
+}
+
+func TestRunShowListsStepsAndWhyOneFailed(t *testing.T) {
+	server := fakeAPI(t, map[string]any{"/runs/5": map[string]any{
+		"id": 5, "workflow": "Deploy", "state": "error",
+		"steps": []map[string]any{
+			{"name": "Prepare", "state": "success"},
+			{"name": "Deploy", "state": "error", "reason": "Pull image: deploy failed\ndb_password=***REDACTED***"},
+		},
+	}})
+	h := newHarness(t, server)
+	if code := h.run("runs", "show", "5"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	out := h.stdout.String()
+	if !strings.Contains(out, "Steps:") || !strings.Contains(out, "2. Deploy\n     Pull image: deploy failed\n     db_password") {
+		t.Errorf("stdout:\n%s", out)
+	}
+}
+
+func TestRunsAreLookedUpByIDOnly(t *testing.T) {
+	h := newHarness(t, fakeAPI(t, nil))
+	if code := h.run("runs", "show", "deploy"); code != 2 {
+		t.Fatalf("exit %d", code)
+	}
+}
+
+func TestJSONPrintsTheAPIData(t *testing.T) {
+	h := newHarness(t, fakeAPI(t, map[string]any{"/apps": apps}))
+	if code := h.run("apps", "--json"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	var got struct{ Total int }
+	if err := json.Unmarshal(h.stdout.Bytes(), &got); err != nil || got.Total != 2 {
+		t.Errorf("not the API data: %v %s", err, h.stdout)
 	}
 }

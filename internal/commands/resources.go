@@ -1,4 +1,4 @@
-package main
+package commands
 
 import (
 	"encoding/json"
@@ -8,6 +8,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/kingswady/cw/internal/output"
+	"github.com/kingswady/cw/internal/platform"
 )
 
 type record = map[string]any
@@ -23,7 +26,7 @@ func (f field) render(r record) string {
 	if f.format != nil {
 		return f.format(r[f.key])
 	}
-	return text(r[f.key])
+	return output.Text(r[f.key])
 }
 
 // filter is a flag that narrows a list; lookup names the resource whose name
@@ -44,7 +47,7 @@ type resource struct {
 	columns []field
 	details []field
 	// extra prints what a detail view has beyond its fields (a run's steps).
-	extra func(a *app, r record, out tableOutput) error
+	extra func(a *App, r record, out output.Table) error
 	// hidesDeleted: the API leaves deleted records out unless asked (--all).
 	hidesDeleted bool
 	// optional columns, each shown when its own flag is given (--show-url).
@@ -76,7 +79,7 @@ var resources = []*resource{
 			{key: "id", title: "ID"}, {key: "name", title: "NAME"},
 			{key: "environment_type", title: "ENV"}, {key: "version", title: "VERSION"},
 			{key: "state", title: "STATE"}, {key: "server", title: "SERVER"},
-			{key: "backup_health", title: "BACKUPS"}, {key: "updated_at", title: "UPDATED", format: ago},
+			{key: "backup_health", title: "BACKUPS"}, {key: "updated_at", title: "UPDATED", format: output.Ago},
 			namespaceField,
 		},
 		details: []field{
@@ -84,10 +87,10 @@ var resources = []*resource{
 			{key: "project", title: "Project"}, {key: "environment", title: "Environment"},
 			{key: "environment_type", title: "Type"}, {key: "version", title: "Version"},
 			{key: "edition", title: "Edition"}, {key: "state", title: "State"}, {key: "url", title: "URL"},
-			{key: "server", title: "Server"}, {key: "deployed_at", title: "Deployed", format: localTime},
-			{key: "updated_at", title: "Updated", format: localTime},
+			{key: "server", title: "Server"}, {key: "deployed_at", title: "Deployed", format: output.LocalTime},
+			{key: "updated_at", title: "Updated", format: output.LocalTime},
 			{key: "backup_health", title: "Backup health"},
-			{key: "last_backup_at", title: "Last backup", format: localTime},
+			{key: "last_backup_at", title: "Last backup", format: output.LocalTime},
 		},
 	},
 	{
@@ -128,15 +131,15 @@ var resources = []*resource{
 		name: "backups", singular: "backup",
 		filters: []filter{{flag: "app", param: "app_id", usage: "only this app's backups (id or name)", lookup: "apps"}},
 		columns: []field{
-			{key: "id", title: "ID"}, {key: "app", title: "APP"}, {key: "taken_at", title: "TAKEN", format: ago},
-			{key: "size_mb", title: "SIZE", format: megabytes}, {key: "format", title: "FORMAT"},
+			{key: "id", title: "ID"}, {key: "app", title: "APP"}, {key: "taken_at", title: "TAKEN", format: output.Ago},
+			{key: "size_mb", title: "SIZE", format: output.Megabytes}, {key: "format", title: "FORMAT"},
 			{key: "automated", title: "AUTO"}, {key: "state", title: "STATE"}, {key: "storage", title: "STORAGE"},
 			namespaceField,
 		},
 		details: []field{
 			{key: "id", title: "ID"}, {key: "name", title: "Name"}, {key: "namespace", title: "Namespace"},
 			{key: "app", title: "App"}, {key: "environment_type", title: "Environment"},
-			{key: "taken_at", title: "Taken", format: localTime}, {key: "size_mb", title: "Size", format: megabytes},
+			{key: "taken_at", title: "Taken", format: output.LocalTime}, {key: "size_mb", title: "Size", format: output.Megabytes},
 			{key: "format", title: "Format"}, {key: "automated", title: "Automated"}, {key: "state", title: "State"},
 			{key: "storage", title: "Storage"},
 		},
@@ -150,13 +153,13 @@ var resources = []*resource{
 		columns: []field{
 			{key: "id", title: "ID"}, {key: "workflow", title: "WORKFLOW"}, {key: "action", title: "ACTION"},
 			{key: "state", title: "STATE"}, {key: "record", title: "FOR"},
-			{key: "updated_at", title: "UPDATED", format: ago}, namespaceField,
+			{key: "updated_at", title: "UPDATED", format: output.Ago}, namespaceField,
 		},
 		details: []field{
 			{key: "id", title: "ID"}, {key: "workflow", title: "Workflow"}, {key: "action", title: "Action"},
 			{key: "state", title: "State"}, {key: "namespace", title: "Namespace"}, {key: "record", title: "For"},
-			{key: "record_type", title: "Type"}, {key: "created_at", title: "Started", format: localTime},
-			{key: "updated_at", title: "Updated", format: localTime},
+			{key: "record_type", title: "Type"}, {key: "created_at", title: "Started", format: output.LocalTime},
+			{key: "updated_at", title: "Updated", format: output.LocalTime},
 		},
 		extra: printSteps,
 	},
@@ -183,7 +186,7 @@ type readFlags struct {
 	optional  map[string]*bool
 }
 
-func (a *app) readFlagSet(res *resource) (*flag.FlagSet, *readFlags) {
+func (a *App) readFlagSet(res *resource) (*flag.FlagSet, *readFlags) {
 	fs := a.newFlags(res.name)
 	opts := &readFlags{filters: map[string]*string{}, optional: map[string]*bool{}}
 	fs.BoolVar(&opts.json, "json", false, "print the API response as JSON")
@@ -211,7 +214,7 @@ func (a *app) readFlagSet(res *resource) (*flag.FlagSet, *readFlags) {
 	return fs, opts
 }
 
-func (a *app) resource(res *resource, args []string) error {
+func (a *App) resource(res *resource, args []string) error {
 	fs, opts := a.readFlagSet(res)
 	positional, err := parseArgs(fs, args)
 	if err != nil {
@@ -225,7 +228,7 @@ func (a *app) resource(res *resource, args []string) error {
 	if err != nil {
 		return err
 	}
-	out := tableOutput{color: color}
+	out := output.Table{Color: color}
 	switch {
 	case len(positional) == 0:
 		return a.list(c, res, opts, out)
@@ -235,30 +238,6 @@ func (a *app) resource(res *resource, args []string) error {
 		fs.Usage()
 		return usagef("unexpected arguments: %s", strings.Join(positional, " "))
 	}
-}
-
-// tableOutput is how tables print: plain, or coloured for a terminal.
-type tableOutput struct{ color bool }
-
-func (out tableOutput) cell(key, text string) string {
-	if out.color {
-		return style(key, text)
-	}
-	return text
-}
-
-func (out tableOutput) headers(titles []string) []string {
-	if out.color {
-		return boldAll(titles)
-	}
-	return titles
-}
-
-func (out tableOutput) label(text string) string {
-	if out.color {
-		return paint(ansiDim, text)
-	}
-	return text
 }
 
 // columnsFor is the resource's columns plus the optional ones asked for,
@@ -281,17 +260,17 @@ func columnsFor(res *resource, opts *readFlags) []field {
 // getList asks for one list page. A platform older than include_deleted
 // answers unknown_parameter and already lists deleted records, so the
 // parameter is dropped there.
-func getList(c *client, path string, query url.Values) (json.RawMessage, error) {
-	raw, err := c.get(path, query)
-	var refused *apiError
-	if errors.As(err, &refused) && refused.code == "unknown_parameter" && query.Has("include_deleted") {
+func getList(c *platform.Client, path string, query url.Values) (json.RawMessage, error) {
+	raw, err := c.Get(path, query)
+	var refused *platform.APIError
+	if errors.As(err, &refused) && refused.Code == "unknown_parameter" && query.Has("include_deleted") {
 		query.Del("include_deleted")
-		return c.get(path, query)
+		return c.Get(path, query)
 	}
 	return raw, err
 }
 
-func (a *app) list(c *client, res *resource, opts *readFlags, out tableOutput) error {
+func (a *App) list(c *platform.Client, res *resource, opts *readFlags, out output.Table) error {
 	query := url.Values{"limit": {strconv.Itoa(opts.limit)}, "offset": {strconv.Itoa(opts.offset)}}
 	if opts.all {
 		query.Set("include_deleted", "true")
@@ -318,13 +297,13 @@ func (a *app) list(c *client, res *resource, opts *readFlags, out tableOutput) e
 		return err
 	}
 	if opts.json {
-		return writeJSON(a.stdout, raw)
+		return output.WriteJSON(a.stdout, raw)
 	}
 	var page struct {
 		Items []record    `json:"items"`
 		Total json.Number `json:"total"`
 	}
-	if err := decode(raw, &page); err != nil {
+	if err := platform.Decode(raw, &page); err != nil {
 		return err
 	}
 	if len(page.Items) == 0 {
@@ -340,10 +319,10 @@ func (a *app) list(c *client, res *resource, opts *readFlags, out tableOutput) e
 	for i, item := range page.Items {
 		rows[i] = make([]string, len(columns))
 		for j, col := range columns {
-			rows[i][j] = out.cell(col.key, col.render(item))
+			rows[i][j] = out.Cell(col.key, col.render(item))
 		}
 	}
-	if err := writeTable(a.stdout, out.headers(headers), rows); err != nil {
+	if err := output.WriteTable(a.stdout, out.Headers(headers), rows); err != nil {
 		return err
 	}
 	if total, _ := page.Total.Int64(); int(total) > opts.offset+len(page.Items) {
@@ -357,7 +336,7 @@ func (a *app) list(c *client, res *resource, opts *readFlags, out tableOutput) e
 func visibleColumns(columns []field, items []record) []field {
 	seen := map[string]bool{}
 	for _, item := range items {
-		seen[text(item[namespaceField.key])] = true
+		seen[output.Text(item[namespaceField.key])] = true
 	}
 	if len(seen) > 1 {
 		return columns
@@ -371,27 +350,27 @@ func visibleColumns(columns []field, items []record) []field {
 	return visible
 }
 
-func (a *app) show(c *client, res *resource, opts *readFlags, ref string, out tableOutput) error {
+func (a *App) show(c *platform.Client, res *resource, opts *readFlags, ref string, out output.Table) error {
 	id, err := a.resolveID(c, res, ref, opts.namespace, opts.all)
 	if err != nil {
 		return err
 	}
-	raw, err := c.get("/"+res.name+"/"+id, nil)
+	raw, err := c.Get("/"+res.name+"/"+id, nil)
 	if err != nil {
 		return err
 	}
 	if opts.json {
-		return writeJSON(a.stdout, raw)
+		return output.WriteJSON(a.stdout, raw)
 	}
 	var item record
-	if err := decode(raw, &item); err != nil {
+	if err := platform.Decode(raw, &item); err != nil {
 		return err
 	}
 	rows := make([][]string, len(res.details))
 	for i, f := range res.details {
-		rows[i] = []string{out.label(f.title + ":"), out.cell(f.key, f.render(item))}
+		rows[i] = []string{out.Label(f.title + ":"), out.Cell(f.key, f.render(item))}
 	}
-	if err := writeTable(a.stdout, nil, rows); err != nil {
+	if err := output.WriteTable(a.stdout, nil, rows); err != nil {
 		return err
 	}
 	if res.extra != nil {
@@ -402,7 +381,7 @@ func (a *app) show(c *client, res *resource, opts *readFlags, ref string, out ta
 
 // resolveID accepts an id, or the exact name of one record the token can see.
 // Deleted records are left out unless includeDeleted (--all); their ids still work.
-func (a *app) resolveID(c *client, res *resource, ref, namespace string, includeDeleted bool) (string, error) {
+func (a *App) resolveID(c *platform.Client, res *resource, ref, namespace string, includeDeleted bool) (string, error) {
 	if _, err := strconv.Atoi(ref); err == nil {
 		return ref, nil
 	}
@@ -426,11 +405,11 @@ func (a *app) resolveID(c *client, res *resource, ref, namespace string, include
 			Items []record    `json:"items"`
 			Total json.Number `json:"total"`
 		}
-		if err := decode(raw, &page); err != nil {
+		if err := platform.Decode(raw, &page); err != nil {
 			return "", err
 		}
 		for _, item := range page.Items {
-			if strings.EqualFold(text(item["name"]), ref) {
+			if strings.EqualFold(output.Text(item["name"]), ref) {
 				matches = append(matches, item)
 			}
 		}
@@ -442,43 +421,43 @@ func (a *app) resolveID(c *client, res *resource, ref, namespace string, include
 	case 0:
 		return "", fmt.Errorf("no %s named %q in this token's namespaces", res.singular, ref)
 	case 1:
-		return text(matches[0]["id"]), nil
+		return output.Text(matches[0]["id"]), nil
 	}
 	candidates := make([]string, len(matches))
 	for i, m := range matches {
-		candidates[i] = fmt.Sprintf("%s (%s)", text(m["id"]), text(m["namespace"]))
+		candidates[i] = fmt.Sprintf("%s (%s)", output.Text(m["id"]), output.Text(m["namespace"]))
 	}
 	return "", fmt.Errorf("%d %ss are named %q — use an id: %s", len(matches), res.singular, ref, strings.Join(candidates, ", "))
 }
 
-func printSteps(a *app, run record, out tableOutput) error {
+func printSteps(a *App, run record, out output.Table) error {
 	steps, _ := run["steps"].([]any)
 	if len(steps) == 0 {
 		return nil
 	}
-	fmt.Fprintln(a.stdout, "\n"+out.label("Steps:"))
+	fmt.Fprintln(a.stdout, "\n"+out.Label("Steps:"))
 	rows := make([][]string, 0, len(steps))
 	var reasons []string
 	for i, raw := range steps {
 		step, _ := raw.(record)
 		rows = append(rows, []string{
-			strconv.Itoa(i + 1), text(step["name"]), out.cell("state", text(step["state"])),
-			localTime(step["started_at"]), localTime(step["updated_at"]),
+			strconv.Itoa(i + 1), output.Text(step["name"]), out.Cell("state", output.Text(step["state"])),
+			output.LocalTime(step["started_at"]), output.LocalTime(step["updated_at"]),
 		})
-		if reason := text(step["reason"]); reason != "-" {
+		if reason := output.Text(step["reason"]); reason != "-" {
 			// A reason can span lines (a task message); keep them under their step.
 			reason = strings.ReplaceAll(strings.TrimSpace(reason), "\n", "\n     ")
-			if out.color {
-				reason = paint(ansiRed, reason)
+			if out.Color {
+				reason = output.Paint(output.Red, reason)
 			}
-			reasons = append(reasons, fmt.Sprintf("  %d. %s\n     %s", i+1, text(step["name"]), reason))
+			reasons = append(reasons, fmt.Sprintf("  %d. %s\n     %s", i+1, output.Text(step["name"]), reason))
 		}
 	}
-	if err := writeTable(a.stdout, out.headers([]string{"#", "STEP", "STATE", "STARTED", "UPDATED"}), rows); err != nil {
+	if err := output.WriteTable(a.stdout, out.Headers([]string{"#", "STEP", "STATE", "STARTED", "UPDATED"}), rows); err != nil {
 		return err
 	}
 	if len(reasons) > 0 {
-		fmt.Fprintln(a.stdout, "\n"+out.label("Why:"))
+		fmt.Fprintln(a.stdout, "\n"+out.Label("Why:"))
 		fmt.Fprintln(a.stdout, strings.Join(reasons, "\n"))
 	}
 	return nil

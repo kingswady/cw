@@ -1,4 +1,4 @@
-package main
+package commands
 
 import (
 	"bytes"
@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/kingswady/cw/internal/output"
+	"github.com/kingswady/cw/internal/platform"
 )
 
 // exitAttention is cw attention's exit code when something needs attention,
@@ -30,23 +32,23 @@ var attentionColumns = map[string][]field{
 	"app": {
 		{key: "id", title: "ID"}, {key: "name", title: "APP"}, {key: "environment_type", title: "ENV"},
 		{key: "state", title: "STATE"}, {key: "backup_health", title: "BACKUPS"},
-		{key: "last_backup_at", title: "LAST BACKUP", format: ago}, {key: "server", title: "SERVER"},
+		{key: "last_backup_at", title: "LAST BACKUP", format: output.Ago}, {key: "server", title: "SERVER"},
 		namespaceField,
 	},
 	"url": {
 		{key: "id", title: "ID"}, {key: "url", title: "URL"}, {key: "ssl_status", title: "SSL"},
-		{key: "ssl_expires_at", title: "EXPIRES", format: ago}, {key: "owner", title: "FOR"}, namespaceField,
+		{key: "ssl_expires_at", title: "EXPIRES", format: output.Ago}, {key: "owner", title: "FOR"}, namespaceField,
 	},
 	"failure": {
 		{key: "run_id", title: "RUN"}, {key: "workflow", title: "WORKFLOW"}, {key: "step", title: "STEP"},
-		{key: "record", title: "FOR"}, {key: "failed_at", title: "FAILED", format: ago},
-		{key: "reason", title: "WHY", format: firstLine}, namespaceField,
+		{key: "record", title: "FOR"}, {key: "failed_at", title: "FAILED", format: output.Ago},
+		{key: "reason", title: "WHY", format: output.FirstLine}, namespaceField,
 	},
 }
 
-var severityColor = map[string]string{"danger": ansiRed, "warning": ansiYellow}
+var severityColor = map[string]string{"danger": output.Red, "warning": output.Yellow}
 
-func (a *app) attention(args []string) error {
+func (a *App) attention(args []string) error {
 	fs := a.newFlags("attention")
 	asJSON := fs.Bool("json", false, "print the API response as JSON")
 	namespace := fs.String("namespace", "", "only this namespace (code or id)")
@@ -75,10 +77,10 @@ func (a *app) attention(args []string) error {
 	if *namespace != "" {
 		query.Set("namespace", *namespace)
 	}
-	raw, err := c.get("/attention", query)
-	var refused *apiError
-	if errors.As(err, &refused) && refused.code == "not_found" {
-		return fmt.Errorf("%s does not answer cw attention yet — it needs a newer platform version", c.base)
+	raw, err := c.Get("/attention", query)
+	var refused *platform.APIError
+	if errors.As(err, &refused) && refused.Code == "not_found" {
+		return fmt.Errorf("%s does not answer cw attention yet — it needs a newer platform version", c.Base)
 	}
 	if err != nil {
 		return err
@@ -86,13 +88,13 @@ func (a *app) attention(args []string) error {
 	var result struct {
 		Sections []attentionSection `json:"sections"`
 	}
-	if err := decode(raw, &result); err != nil {
+	if err := platform.Decode(raw, &result); err != nil {
 		return err
 	}
 	if *asJSON {
-		err = writeJSON(a.stdout, raw)
+		err = output.WriteJSON(a.stdout, raw)
 	} else {
-		err = a.printAttention(result.Sections, tableOutput{color: color})
+		err = a.printAttention(result.Sections, output.Table{Color: color})
 	}
 	if err == nil && len(result.Sections) > 0 {
 		return errNeedsAttention
@@ -100,11 +102,11 @@ func (a *app) attention(args []string) error {
 	return err
 }
 
-func (a *app) printAttention(sections []attentionSection, out tableOutput) error {
+func (a *App) printAttention(sections []attentionSection, out output.Table) error {
 	if len(sections) == 0 {
 		msg := "Nothing needs attention."
-		if out.color {
-			msg = paint(ansiGreen, msg)
+		if out.Color {
+			msg = output.Paint(output.Green, msg)
 		}
 		fmt.Fprintln(a.stdout, msg)
 		return nil
@@ -115,8 +117,8 @@ func (a *app) printAttention(sections []attentionSection, out tableOutput) error
 			fmt.Fprintln(a.stdout)
 		}
 		title := fmt.Sprintf("%-8s%d %s", strings.ToUpper(section.Severity), section.Count, section.Label)
-		if out.color {
-			title = paint(ansiBold+severityColor[section.Severity], title)
+		if out.Color {
+			title = output.Paint(output.Bold+severityColor[section.Severity], title)
 		}
 		fmt.Fprintln(a.stdout, title)
 		if err := a.printSection(section, out); err != nil {
@@ -125,12 +127,12 @@ func (a *app) printAttention(sections []attentionSection, out tableOutput) error
 		failures = failures || section.Kind == "failure"
 	}
 	if failures {
-		fmt.Fprintln(a.stdout, "\n"+out.label("Why a run failed, step by step: cw runs show <RUN>"))
+		fmt.Fprintln(a.stdout, "\n"+out.Label("Why a run failed, step by step: cw runs show <RUN>"))
 	}
 	return nil
 }
 
-func (a *app) printSection(section attentionSection, out tableOutput) error {
+func (a *App) printSection(section attentionSection, out output.Table) error {
 	columns := visibleColumns(attentionColumns[section.Kind], section.Items)
 	if len(columns) == 0 || len(section.Items) == 0 {
 		return nil
@@ -143,11 +145,11 @@ func (a *app) printSection(section attentionSection, out tableOutput) error {
 	for i, item := range section.Items {
 		rows[i] = make([]string, len(columns))
 		for j, col := range columns {
-			rows[i][j] = out.cell(col.key, col.render(item))
+			rows[i][j] = out.Cell(col.key, col.render(item))
 		}
 	}
 	var table bytes.Buffer
-	if err := writeTable(&table, out.headers(headers), rows); err != nil {
+	if err := output.WriteTable(&table, out.Headers(headers), rows); err != nil {
 		return err
 	}
 	for _, line := range strings.SplitAfter(strings.TrimSuffix(table.String(), "\n"), "\n") {
@@ -155,16 +157,7 @@ func (a *app) printSection(section attentionSection, out tableOutput) error {
 	}
 	fmt.Fprintln(a.stdout)
 	if more := section.Count - len(section.Items); more > 0 {
-		fmt.Fprintln(a.stdout, "  "+out.label(fmt.Sprintf("… and %d more", more)))
+		fmt.Fprintln(a.stdout, "  "+out.Label(fmt.Sprintf("… and %d more", more)))
 	}
 	return nil
-}
-
-// firstLine is a cell's worth of a long text: its first line, cut at 80 characters.
-func firstLine(value any) string {
-	s := strings.TrimSpace(strings.SplitN(text(value), "\n", 2)[0])
-	if utf8.RuneCountInString(s) > 80 {
-		s = string([]rune(s)[:79]) + "…"
-	}
-	return s
 }

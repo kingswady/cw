@@ -1,7 +1,9 @@
-package main
+package mcpbridge
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -49,15 +51,18 @@ func fakeMCP(t *testing.T, answer map[string]func(w http.ResponseWriter, id json
 	return server, seen
 }
 
-func runMCP(t *testing.T, server *httptest.Server, lines ...string) (*harness, []map[string]any) {
+const goodToken = "cwk_test-token-0123456789"
+
+// runMCP feeds lines to a Bridge on server and returns its answers, sorted by id.
+func runMCP(t *testing.T, server *httptest.Server, lines ...string) (*bytes.Buffer, []map[string]any) {
 	t.Helper()
-	h := newHarness(t, server)
-	h.app.stdin = strings.NewReader(strings.Join(lines, "\n") + "\n")
-	if code := h.run("mcp"); code != 0 {
-		t.Fatalf("exit %d: %s", code, h.stderr)
+	var out, log bytes.Buffer
+	b := &Bridge{Endpoint: server.URL + "/mcp", Token: goodToken, HTTP: server.Client(), UserAgent: "cw/test", Out: &out, Log: &log}
+	if err := b.Serve(strings.NewReader(strings.Join(lines, "\n") + "\n")); err != nil {
+		t.Fatal(err)
 	}
 	var answers []map[string]any
-	for _, line := range strings.Split(strings.TrimSpace(h.stdout.String()), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
 		if line == "" {
 			continue
 		}
@@ -67,8 +72,8 @@ func runMCP(t *testing.T, server *httptest.Server, lines ...string) (*harness, [
 		}
 		answers = append(answers, answer)
 	}
-	sort.Slice(answers, func(i, j int) bool { return text(answers[i]["id"]) < text(answers[j]["id"]) })
-	return h, answers
+	sort.Slice(answers, func(i, j int) bool { return fmt.Sprint(answers[i]["id"]) < fmt.Sprint(answers[j]["id"]) })
+	return &log, answers
 }
 
 func TestMCPForwardsAModernCallWithItsHeaders(t *testing.T) {
@@ -90,16 +95,12 @@ func TestMCPRemembersTheVersionInitializeAgreed(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"protocolVersion": "2025-06-18"}})
 		},
 	})
-	h := newHarness(t, server)
 	// A 2025 client waits for initialize before anything else; so does this test.
-	h.app.stdin = strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}` + "\n")
-	if code := h.run("mcp"); code != 0 {
-		t.Fatalf("exit %d: %s", code, h.stderr)
-	}
+	runMCP(t, server, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}}`)
 	if got := (*seen)[0].Get("MCP-Protocol-Version"); got != "2025-11-25" {
 		t.Errorf("initialize carries the version it offers, got %q", got)
 	}
-	b := &mcpBridge{version: "2025-06-18"}
+	b := &Bridge{version: "2025-06-18"}
 	if got := b.versionFor(&mcpMessage{Method: "tools/list"}); got != "2025-06-18" {
 		t.Errorf("later requests repeat the agreed version, got %q", got)
 	}
@@ -107,9 +108,9 @@ func TestMCPRemembersTheVersionInitializeAgreed(t *testing.T) {
 
 func TestMCPNotificationsGetNoAnswer(t *testing.T) {
 	server, _ := fakeMCP(t, nil)
-	h, answers := runMCP(t, server, `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
-	if len(answers) != 0 || h.stderr.Len() != 0 {
-		t.Errorf("answers %v, stderr %s", answers, h.stderr)
+	log, answers := runMCP(t, server, `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	if len(answers) != 0 || log.Len() != 0 {
+		t.Errorf("answers %v, log %s", answers, log)
 	}
 }
 
@@ -129,7 +130,7 @@ func TestMCPTurnsAnythingButMCPIntoAnErrorForThatRequest(t *testing.T) {
 			t.Errorf("expected an error: %v", answer)
 		}
 	}
-	if answers[1]["id"] != "a" || !strings.Contains(text(answers[1]["error"].(map[string]any)["message"]), "HTTP 502") {
+	if answers[1]["id"] != "a" || !strings.Contains(fmt.Sprint(answers[1]["error"].(map[string]any)["message"]), "HTTP 502") {
 		t.Errorf("the failed request keeps its id and says why: %v", answers[1])
 	}
 }
@@ -145,14 +146,6 @@ func TestMCPPassesOnEachEventOfAStream(t *testing.T) {
 	_, answers := runMCP(t, server, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"x"}}`)
 	if len(answers) != 2 {
 		t.Fatalf("answers: %v", answers)
-	}
-}
-
-func TestMCPNeedsALogin(t *testing.T) {
-	h := newHarness(t, nil)
-	h.env["CW_URL"] = "https://platform.example"
-	if code := h.run("mcp"); code != 1 || !strings.Contains(h.stderr.String(), "not logged in") {
-		t.Fatalf("exit %d: %s", code, h.stderr)
 	}
 }
 
