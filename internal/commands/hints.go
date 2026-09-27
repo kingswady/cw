@@ -64,11 +64,14 @@ func (a *App) hintUpdate() {
 		}
 		_ = config.WritePrivateJSON(a.updateStatePath(), state)
 	}
-	current := "v" + a.version
+	current := a.currentTag()
 	if state.Latest != "" && selfupdate.Newer(state.Latest, current) {
 		fmt.Fprintf(a.stderr, "\ncw %s is available (you have %s) — run: cw update\n", state.Latest, current)
 	}
 }
+
+// currentTag is this build's version as a release tag, however the build stamped it.
+func (a *App) currentTag() string { return selfupdate.Tag(a.version) }
 
 // quickClient bounds the daily check: a slow network must not slow a command down.
 var quickClient = &http.Client{

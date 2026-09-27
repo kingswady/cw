@@ -27,12 +27,14 @@ func (a *App) update(args []string) error {
 	}
 	releases := strings.TrimRight(a.releases(), "/")
 	tag := *want
-	if tag == "" {
+	if tag != "" {
+		tag = selfupdate.Tag(tag) // --version 0.3.0 is v0.3.0
+	} else {
 		if tag, err = selfupdate.LatestTag(releases); err != nil {
 			return err
 		}
 	}
-	current := "v" + strings.TrimPrefix(a.version, "v")
+	current := a.currentTag()
 	if !*force && !selfupdate.Newer(tag, current) {
 		fmt.Fprintf(a.stdout, "cw is up to date (%s).\n", current)
 		return nil

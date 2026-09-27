@@ -77,3 +77,18 @@ func TestAnUpdateHintAtMostOnceADayInATerminal(t *testing.T) {
 		}
 	}
 }
+
+func TestAVersionStampedWithItsVIsNotDoubled(t *testing.T) {
+	releases := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/tag/v9.9.9", http.StatusFound)
+	}))
+	t.Cleanup(releases.Close)
+	h := newHarness(t, fakeAPI(t, map[string]any{"/whoami": map[string]any{"login": "a", "name": "A"}}))
+	h.app.version = "v0.3.0" // make build: git describe
+	h.env["CW_DOWNLOAD_BASE"] = releases.URL
+	h.app.stdoutIsTerminal = func() bool { return true }
+	h.run("whoami")
+	if !strings.Contains(h.stderr.String(), "(you have v0.3.0)") {
+		t.Errorf("stderr %q", h.stderr)
+	}
+}

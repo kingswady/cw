@@ -137,6 +137,10 @@ func TestUpdateToAChosenVersion(t *testing.T) {
 	if body, _ := os.ReadFile(target); string(body) != "pinned binary" {
 		t.Errorf("binary %q", body)
 	}
+	bare, _ := updateHarness(t, server, "0.3.0")
+	if code := bare.run("update", "--version", "0.2.0", "--force"); code != 0 || !strings.Contains(bare.stdout.String(), "→ v0.2.0") {
+		t.Errorf("--version without its v: exit %d: %s %s", code, bare.stdout, bare.stderr)
+	}
 }
 
 func TestADevelopmentBuildNeedsForce(t *testing.T) {
