@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"strconv"
 	"strings"
@@ -20,6 +21,9 @@ type field struct {
 	key    string
 	title  string
 	format func(any) string
+	// hideEmpty drops the column from a table where no row has a value
+	// (an older platform without the field, runs that are not about an app).
+	hideEmpty bool
 }
 
 func (f field) render(r record) string {
@@ -61,6 +65,9 @@ type optionalColumn struct {
 }
 
 var namespaceField = field{key: "namespace", title: "NAMESPACE"}
+
+// envField is the app's environment, coloured like the dashboard.
+var envField = field{key: "environment_type", title: "ENV", hideEmpty: true}
 
 var resources = []*resource{
 	{
@@ -131,7 +138,7 @@ var resources = []*resource{
 		name: "backups", singular: "backup",
 		filters: []filter{{flag: "app", param: "app_id", usage: "only this app's backups (id or name)", lookup: "apps"}},
 		columns: []field{
-			{key: "id", title: "ID"}, {key: "app", title: "APP"}, {key: "taken_at", title: "TAKEN", format: output.Ago},
+			{key: "id", title: "ID"}, {key: "app", title: "APP"}, envField, {key: "taken_at", title: "TAKEN", format: output.Ago},
 			{key: "size_mb", title: "SIZE", format: output.Megabytes}, {key: "format", title: "FORMAT"},
 			{key: "automated", title: "AUTO"}, {key: "state", title: "STATE"}, {key: "storage", title: "STORAGE"},
 			namespaceField,
@@ -152,13 +159,14 @@ var resources = []*resource{
 		},
 		columns: []field{
 			{key: "id", title: "ID"}, {key: "workflow", title: "WORKFLOW"}, {key: "action", title: "ACTION"},
-			{key: "state", title: "STATE"}, {key: "record", title: "FOR"},
+			{key: "state", title: "STATE"}, {key: "record", title: "FOR"}, envField,
 			{key: "updated_at", title: "UPDATED", format: output.Ago}, namespaceField,
 		},
 		details: []field{
 			{key: "id", title: "ID"}, {key: "workflow", title: "Workflow"}, {key: "action", title: "Action"},
 			{key: "state", title: "State"}, {key: "namespace", title: "Namespace"}, {key: "record", title: "For"},
-			{key: "record_type", title: "Type"}, {key: "created_at", title: "Started", format: output.LocalTime},
+			{key: "record_type", title: "Type"}, {key: "environment_type", title: "Environment"},
+			{key: "created_at", title: "Started", format: output.LocalTime},
 			{key: "updated_at", title: "Updated", format: output.LocalTime},
 		},
 		extra: printSteps,
@@ -284,7 +292,7 @@ func (a *App) list(c *platform.Client, res *resource, opts *readFlags, out outpu
 			continue
 		}
 		if f.lookup != "" {
-			id, err := a.resolveID(c, resourceNamed(f.lookup), value, opts.namespace, false)
+			id, err := a.resolveID(c, resourceNamed(f.lookup), value, opts.namespace, false, out)
 			if err != nil {
 				return err
 			}
@@ -310,19 +318,7 @@ func (a *App) list(c *platform.Client, res *resource, opts *readFlags, out outpu
 		fmt.Fprintf(a.stderr, "No %s.\n", res.name)
 		return nil
 	}
-	columns := visibleColumns(columnsFor(res, opts), page.Items)
-	headers := make([]string, len(columns))
-	for i, col := range columns {
-		headers[i] = col.title
-	}
-	rows := make([][]string, len(page.Items))
-	for i, item := range page.Items {
-		rows[i] = make([]string, len(columns))
-		for j, col := range columns {
-			rows[i][j] = out.Cell(col.key, col.render(item))
-		}
-	}
-	if err := output.WriteTable(a.stdout, out.Headers(headers), rows); err != nil {
+	if err := writeRecords(a.stdout, columnsFor(res, opts), page.Items, out); err != nil {
 		return err
 	}
 	if total, _ := page.Total.Int64(); int(total) > opts.offset+len(page.Items) {
@@ -332,18 +328,37 @@ func (a *App) list(c *platform.Client, res *resource, opts *readFlags, out outpu
 	return nil
 }
 
-// visibleColumns drops the namespace column when every row shares one.
+// writeRecords prints items as a table of columns (the namespace column only
+// when they span more than one).
+func writeRecords(w io.Writer, columns []field, items []record, out output.Table) error {
+	columns = visibleColumns(columns, items)
+	headers := make([]string, len(columns))
+	for i, col := range columns {
+		headers[i] = col.title
+	}
+	rows := make([][]string, len(items))
+	for i, item := range items {
+		rows[i] = make([]string, len(columns))
+		for j, col := range columns {
+			rows[i][j] = out.Cell(col.key, col.render(item))
+		}
+	}
+	return output.WriteTable(w, out.Headers(headers), rows)
+}
+
+// visibleColumns drops the namespace column when every row shares one, and a
+// hideEmpty column when no row has a value.
 func visibleColumns(columns []field, items []record) []field {
-	seen := map[string]bool{}
-	for _, item := range items {
-		seen[output.Text(item[namespaceField.key])] = true
-	}
-	if len(seen) > 1 {
-		return columns
-	}
 	visible := make([]field, 0, len(columns))
 	for _, col := range columns {
-		if col.key != namespaceField.key {
+		seen := map[string]bool{}
+		for _, item := range items {
+			seen[output.Text(item[col.key])] = true
+		}
+		switch {
+		case col.key == namespaceField.key && len(seen) < 2:
+		case col.hideEmpty && len(seen) == 1 && seen["-"]:
+		default:
 			visible = append(visible, col)
 		}
 	}
@@ -351,7 +366,7 @@ func visibleColumns(columns []field, items []record) []field {
 }
 
 func (a *App) show(c *platform.Client, res *resource, opts *readFlags, ref string, out output.Table) error {
-	id, err := a.resolveID(c, res, ref, opts.namespace, opts.all)
+	id, err := a.resolveID(c, res, ref, opts.namespace, opts.all, out)
 	if err != nil {
 		return err
 	}
@@ -381,7 +396,7 @@ func (a *App) show(c *platform.Client, res *resource, opts *readFlags, ref strin
 
 // resolveID accepts an id, or the exact name of one record the token can see.
 // Deleted records are left out unless includeDeleted (--all); their ids still work.
-func (a *App) resolveID(c *platform.Client, res *resource, ref, namespace string, includeDeleted bool) (string, error) {
+func (a *App) resolveID(c *platform.Client, res *resource, ref, namespace string, includeDeleted bool, out output.Table) (string, error) {
 	if _, err := strconv.Atoi(ref); err == nil {
 		return ref, nil
 	}
@@ -423,11 +438,13 @@ func (a *App) resolveID(c *platform.Client, res *resource, ref, namespace string
 	case 1:
 		return output.Text(matches[0]["id"]), nil
 	}
-	candidates := make([]string, len(matches))
-	for i, m := range matches {
-		candidates[i] = fmt.Sprintf("%s (%s)", output.Text(m["id"]), output.Text(m["namespace"]))
+	// Several match: show them the way cw shows records, on stderr (stdout may be --json).
+	fmt.Fprintf(a.stderr, "%d %ss are named %q:\n\n", len(matches), res.singular, ref)
+	if err := writeRecords(a.stderr, res.columns, matches, out); err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("%d %ss are named %q — use an id: %s", len(matches), res.singular, ref, strings.Join(candidates, ", "))
+	fmt.Fprintln(a.stderr)
+	return "", fmt.Errorf("use one of these ids instead of %q, or narrow it with --namespace", ref)
 }
 
 func printSteps(a *App, run record, out output.Table) error {

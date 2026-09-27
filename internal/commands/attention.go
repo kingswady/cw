@@ -41,7 +41,7 @@ var attentionColumns = map[string][]field{
 	},
 	"failure": {
 		{key: "run_id", title: "RUN"}, {key: "workflow", title: "WORKFLOW"}, {key: "step", title: "STEP"},
-		{key: "record", title: "FOR"}, {key: "failed_at", title: "FAILED", format: output.Ago},
+		{key: "record", title: "FOR"}, envField, {key: "failed_at", title: "FAILED", format: output.Ago},
 		{key: "reason", title: "WHY", format: output.FirstLine}, namespaceField,
 	},
 }
@@ -133,23 +133,11 @@ func (a *App) printAttention(sections []attentionSection, out output.Table) erro
 }
 
 func (a *App) printSection(section attentionSection, out output.Table) error {
-	columns := visibleColumns(attentionColumns[section.Kind], section.Items)
-	if len(columns) == 0 || len(section.Items) == 0 {
+	if len(section.Items) == 0 {
 		return nil
 	}
-	headers := make([]string, len(columns))
-	for i, col := range columns {
-		headers[i] = col.title
-	}
-	rows := make([][]string, len(section.Items))
-	for i, item := range section.Items {
-		rows[i] = make([]string, len(columns))
-		for j, col := range columns {
-			rows[i][j] = out.Cell(col.key, col.render(item))
-		}
-	}
 	var table bytes.Buffer
-	if err := output.WriteTable(&table, out.Headers(headers), rows); err != nil {
+	if err := writeRecords(&table, attentionColumns[section.Kind], section.Items, out); err != nil {
 		return err
 	}
 	for _, line := range strings.SplitAfter(strings.TrimSuffix(table.String(), "\n"), "\n") {

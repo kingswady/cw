@@ -176,16 +176,30 @@ func TestShowResolvesAName(t *testing.T) {
 	}
 }
 
-func TestAnAmbiguousNameAsksForTheID(t *testing.T) {
+func TestAnAmbiguousNameListsTheCandidatesAsATable(t *testing.T) {
 	twins := map[string]any{"items": []map[string]any{
-		{"id": 1, "name": "shop", "namespace": "a"}, {"id": 2, "name": "shop", "namespace": "b"},
+		{"id": 1113, "name": "shop", "namespace": "acme", "environment_type": "production", "server": "prod-1"},
+		{"id": 1183, "name": "shop", "namespace": "beta", "environment_type": "staging", "server": "stage-1"},
 	}, "total": 2}
 	h := newHarness(t, fakeAPI(t, map[string]any{"/apps": twins}))
-	if code := h.run("apps", "show", "shop"); code != 1 {
-		t.Fatalf("exit %d", code)
+	if code := h.run("backups", "--app", "shop"); code != 1 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
 	}
-	if !strings.Contains(h.stderr.String(), "1 (a), 2 (b)") {
-		t.Errorf("stderr: %s", h.stderr)
+	lines := strings.Split(h.stderr.String(), "\n")
+	if lines[0] != `2 apps are named "shop":` {
+		t.Errorf("first line %q", lines[0])
+	}
+	table := strings.Join(lines[2:5], "\n")
+	for _, want := range []string{"ID", "ENV", "SERVER", "NAMESPACE", "1113", "production", "prod-1", "acme", "1183", "stage-1", "beta"} {
+		if !strings.Contains(table, want) {
+			t.Errorf("missing %q in the table:\n%s", want, table)
+		}
+	}
+	if !strings.Contains(h.stderr.String(), `cw: use one of these ids instead of "shop", or narrow it with --namespace`) {
+		t.Errorf("stderr:\n%s", h.stderr)
+	}
+	if h.stdout.Len() != 0 {
+		t.Errorf("stdout stays clean for --json: %q", h.stdout)
 	}
 }
 
@@ -238,5 +252,42 @@ func TestJSONPrintsTheAPIData(t *testing.T) {
 	var got struct{ Total int }
 	if err := json.Unmarshal(h.stdout.Bytes(), &got); err != nil || got.Total != 2 {
 		t.Errorf("not the API data: %v %s", err, h.stdout)
+	}
+}
+
+func TestBackupsAndRunsShowTheAppsEnvironment(t *testing.T) {
+	server := fakeAPI(t, map[string]any{
+		"/backups": map[string]any{"items": []map[string]any{
+			{"id": 3, "app": "shop", "environment_type": "production", "namespace": "acme", "taken_at": nil},
+		}, "total": 1},
+		"/runs": map[string]any{"items": []map[string]any{
+			{"id": 5, "workflow": "Deploy", "state": "error", "record": "shop", "environment_type": "staging", "namespace": "acme"},
+		}, "total": 1},
+	})
+	for command, env := range map[string]string{"backups": "production", "runs": "staging"} {
+		h := newHarness(t, server)
+		if code := h.run(command, "--color", "always"); code != 0 {
+			t.Fatalf("%s: exit %d: %s", command, code, h.stderr)
+		}
+		if !strings.Contains(h.stdout.String(), "ENV") {
+			t.Errorf("%s: no ENV column:\n%s", command, h.stdout)
+		}
+		if !strings.Contains(h.stdout.String(), output.Style("environment_type", env)) {
+			t.Errorf("%s: %s is not coloured like the dashboard:\n%s", command, env, h.stdout)
+		}
+	}
+}
+
+func TestAnEnvironmentNoRowHasIsLeftOut(t *testing.T) {
+	// An older platform sends no environment_type; server runs have none.
+	server := fakeAPI(t, map[string]any{"/runs": map[string]any{"items": []map[string]any{
+		{"id": 5, "workflow": "Server update", "state": "done", "record": "prod-1", "namespace": "acme"},
+	}, "total": 1}})
+	h := newHarness(t, server)
+	if code := h.run("runs"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	if strings.Contains(h.stdout.String(), "ENV") {
+		t.Errorf("an empty ENV column is noise:\n%s", h.stdout)
 	}
 }

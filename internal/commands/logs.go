@@ -55,7 +55,7 @@ func (a *App) logs(args []string) error {
 	if err != nil {
 		return err
 	}
-	id, err := a.resolveID(c, resourceNamed("apps"), positional[0], *namespace, false)
+	id, err := a.resolveID(c, resourceNamed("apps"), positional[0], *namespace, false, output.Table{Color: color})
 	if err != nil {
 		return err
 	}
