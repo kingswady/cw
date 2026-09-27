@@ -3,6 +3,7 @@ package platform
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -54,11 +55,16 @@ func NewHTTPClient() *http.Client {
 
 // Get returns the response's "data" member.
 func (c *Client) Get(path string, query url.Values) (json.RawMessage, error) {
+	return c.GetContext(context.Background(), path, query)
+}
+
+// GetContext is Get that gives up when ctx ends (Ctrl-C), returning ctx.Err().
+func (c *Client) GetContext(ctx context.Context, path string, query url.Values) (json.RawMessage, error) {
 	target := c.Base + "/api/v1" + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}
-	req, err := http.NewRequest(http.MethodGet, target, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -67,6 +73,9 @@ func (c *Client) Get(path string, query url.Values) (json.RawMessage, error) {
 	req.Header.Set("User-Agent", c.UserAgent)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("cannot reach %s: %w", c.Base, err)
 	}
 	defer resp.Body.Close()
@@ -75,6 +84,9 @@ func (c *Client) Get(path string, query url.Values) (json.RawMessage, error) {
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("reading the response from %s: %w", c.Base, err)
 	}
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {

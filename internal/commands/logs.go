@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,7 +72,7 @@ func (a *App) logs(args []string) error {
 		query.Set("grep", *grep)
 	}
 	out := logOutput{json: *asJSON, color: color, grep: *grep}
-	page, err := a.printLogs(c, id, query, out)
+	page, err := a.printLogs(context.Background(), c, id, query, out)
 	if err != nil {
 		return err
 	}
@@ -84,9 +85,10 @@ func (a *App) logs(args []string) error {
 	return a.followLogs(c, id, page.Cursor, out)
 }
 
-// followLogs asks for lines after the cursor until interrupted. A refusal
-// that will not heal (token, access, app gone) ends it; the rate limit is
-// waited out; anything else is reported and retried.
+// followLogs asks for lines after the cursor until interrupted — also in
+// the middle of a request, or of catching up. A refusal that will not heal
+// (token, access, app gone) ends it; the rate limit is waited out; anything
+// else is reported and retried.
 func (a *App) followLogs(c *platform.Client, id, cursor string, out logOutput) error {
 	ctx, stop := a.interrupt()
 	defer stop()
@@ -97,9 +99,11 @@ func (a *App) followLogs(c *platform.Client, id, cursor string, out logOutput) e
 		}
 		pause = followInterval
 		var err error
-		cursor, err = a.catchUp(c, id, cursor, out)
+		cursor, err = a.catchUp(ctx, c, id, cursor, out)
 		var refused *platform.APIError
 		switch {
+		case ctx.Err() != nil:
+			return nil // Ctrl-C
 		case err == nil:
 		case errors.As(err, &refused) && refused.Status == http.StatusTooManyRequests:
 			// The platform's rate limit: wait as long as it says, then follow on.
@@ -113,14 +117,15 @@ func (a *App) followLogs(c *platform.Client, id, cursor string, out logOutput) e
 	}
 }
 
-// catchUp prints every line after cursor, page by page, and returns the cursor it reached.
-func (a *App) catchUp(c *platform.Client, id, cursor string, out logOutput) (string, error) {
-	for {
+// catchUp prints every line after cursor, page by page, until it is caught
+// up or ctx ends, and returns the cursor it reached.
+func (a *App) catchUp(ctx context.Context, c *platform.Client, id, cursor string, out logOutput) (string, error) {
+	for ctx.Err() == nil {
 		query := url.Values{"after": {cursor}, "limit": {"2000"}}
 		if out.grep != "" {
 			query.Set("grep", out.grep)
 		}
-		page, err := a.printLogs(c, id, query, out)
+		page, err := a.printLogs(ctx, c, id, query, out)
 		if err != nil {
 			return cursor, err
 		}
@@ -129,6 +134,7 @@ func (a *App) catchUp(c *platform.Client, id, cursor string, out logOutput) (str
 			return cursor, nil
 		}
 	}
+	return cursor, ctx.Err()
 }
 
 // logOutput is how answers are printed: raw JSON, or lines — coloured in a terminal.
@@ -138,9 +144,9 @@ type logOutput struct {
 	grep  string
 }
 
-func (a *App) printLogs(c *platform.Client, id string, query url.Values, out logOutput) (logPage, error) {
+func (a *App) printLogs(ctx context.Context, c *platform.Client, id string, query url.Values, out logOutput) (logPage, error) {
 	var page logPage
-	raw, err := c.Get("/apps/"+id+"/logs", query)
+	raw, err := c.GetContext(ctx, "/apps/"+id+"/logs", query)
 	if err != nil {
 		return page, err
 	}

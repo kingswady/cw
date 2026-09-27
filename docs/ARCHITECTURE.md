@@ -20,7 +20,7 @@ cmd/cw                    entry point: builds commands.App with the version, run
 | `selfupdate` | `LatestTag`, `Fetch`, `ReplaceExecutable`, `Newer`                                         | `platform`                          |
 | `config`     | `Config`, `Resolve` (flag → `CW_URL` → saved → default), `SecretStore`                     | `platform`                          |
 | `output`     | `Clean`, `Text`, `LogLine`, `Table`, `WriteTable`, `Colorize`, `Style`, `Ago`, `LocalTime` | —                                   |
-| `platform`   | `Client.Get`, `APIError`, `NormalizeURL` (never plain http off this machine), no redirects | —                                   |
+| `platform`   | `Client.Get`/`GetContext`, `APIError`, `NormalizeURL` (never plain http off this machine), no redirects | —                     |
 
 ## Where things go
 

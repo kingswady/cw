@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -133,9 +134,11 @@ func TestLogsFollowWaitsOutTheRateLimit(t *testing.T) {
 			w.Header().Set("Retry-After", "7")
 			w.WriteHeader(http.StatusTooManyRequests)
 			w.Write([]byte(`{"error":{"code":"rate_limited","message":"Too many requests; retry in 7 s"}}`))
+		case 3:
+			json.NewEncoder(w).Encode(map[string]any{"data": logAnswer("101", "new line")})
 		default:
 			cancel() // the user pressed Ctrl-C
-			json.NewEncoder(w).Encode(map[string]any{"data": logAnswer("101", "new line")})
+			json.NewEncoder(w).Encode(map[string]any{"data": logAnswer("101")})
 		}
 	}))
 	t.Cleanup(server.Close)
@@ -154,5 +157,74 @@ func TestLogsFollowWaitsOutTheRateLimit(t *testing.T) {
 	}
 	if len(pauses) < 2 || pauses[1] != 7*time.Second {
 		t.Errorf("pauses %v: the second wait must be the platform's Retry-After", pauses)
+	}
+}
+
+func TestCtrlCEndsAFollowInTheMiddleOfARequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("after") == "" {
+			json.NewEncoder(w).Encode(map[string]any{"data": logAnswer("100", "old line")})
+			return
+		}
+		cancel() // Ctrl-C while the platform is still answering
+		select {
+		case <-r.Context().Done(): // cw hung up
+		case <-time.After(10 * time.Second):
+		}
+	}))
+	t.Cleanup(server.Close)
+	h := newHarness(t, server)
+	h.app.interrupt = func() (context.Context, func()) { return ctx, cancel }
+	started := time.Now()
+	if code := h.run("logs", "7", "--follow"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	if took := time.Since(started); took > 5*time.Second {
+		t.Errorf("Ctrl-C waited %v for the request to finish", took)
+	}
+	if strings.Contains(h.stderr.String(), "retrying") {
+		t.Errorf("an interrupted request is not an error: %s", h.stderr)
+	}
+}
+
+func TestCtrlCEndsAFollowThatIsCatchingUp(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var mu sync.Mutex
+	var afters []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		after := r.URL.Query().Get("after")
+		mu.Lock()
+		afters = append(afters, after)
+		mu.Unlock()
+		page := logAnswer("100", "old line")
+		if after != "" {
+			// Far behind: every page is full, there is always a next one.
+			page = logAnswer(after+"0", "line after "+after)
+			page["truncated"] = true
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": page})
+		if after == "1000" {
+			cancel() // Ctrl-C once the second page is printed
+		}
+	}))
+	t.Cleanup(server.Close)
+	h := newHarness(t, server)
+	h.app.interrupt = func() (context.Context, func()) { return ctx, cancel }
+	done := make(chan int)
+	go func() { done <- h.run("logs", "7", "--follow") }()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit %d: %s", code, h.stderr)
+		}
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("Ctrl-C did not stop the catch-up")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(afters) > 4 {
+		t.Errorf("kept paging after Ctrl-C: %q", afters)
 	}
 }
