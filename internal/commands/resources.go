@@ -66,6 +66,9 @@ type optionalColumn struct {
 
 var namespaceField = field{key: "namespace", title: "NAMESPACE"}
 
+// projectField is the app's project — what an app belongs to, quicker than its name.
+var projectField = field{key: "project", title: "PROJECT", hideEmpty: true}
+
 // envField is the app's environment, coloured like the dashboard.
 var envField = field{key: "environment_type", title: "ENV", hideEmpty: true}
 
@@ -83,7 +86,7 @@ var resources = []*resource{
 			{flag: "state", param: "state", usage: "only apps in this state"},
 		},
 		columns: []field{
-			{key: "id", title: "ID"}, {key: "name", title: "NAME"},
+			{key: "id", title: "ID"}, {key: "name", title: "NAME"}, projectField,
 			{key: "environment_type", title: "ENV"}, {key: "version", title: "VERSION"},
 			{key: "state", title: "STATE"}, {key: "server", title: "SERVER"},
 			{key: "backup_health", title: "BACKUPS"}, {key: "updated_at", title: "UPDATED", format: output.Ago},
@@ -138,14 +141,15 @@ var resources = []*resource{
 		name: "backups", singular: "backup",
 		filters: []filter{{flag: "app", param: "app_id", usage: "only this app's backups (id or name)", lookup: "apps"}},
 		columns: []field{
-			{key: "id", title: "ID"}, {key: "app", title: "APP"}, envField, {key: "taken_at", title: "TAKEN", format: output.Ago},
+			{key: "id", title: "ID"}, {key: "app", title: "APP"}, projectField, envField,
+			{key: "taken_at", title: "TAKEN", format: output.Ago},
 			{key: "size_mb", title: "SIZE", format: output.Megabytes}, {key: "format", title: "FORMAT"},
 			{key: "automated", title: "AUTO"}, {key: "state", title: "STATE"}, {key: "storage", title: "STORAGE"},
 			namespaceField,
 		},
 		details: []field{
 			{key: "id", title: "ID"}, {key: "name", title: "Name"}, {key: "namespace", title: "Namespace"},
-			{key: "app", title: "App"}, {key: "environment_type", title: "Environment"},
+			{key: "app", title: "App"}, {key: "project", title: "Project"}, {key: "environment_type", title: "Environment"},
 			{key: "taken_at", title: "Taken", format: output.LocalTime}, {key: "size_mb", title: "Size", format: output.Megabytes},
 			{key: "format", title: "Format"}, {key: "automated", title: "Automated"}, {key: "state", title: "State"},
 			{key: "storage", title: "Storage"},
@@ -159,13 +163,13 @@ var resources = []*resource{
 		},
 		columns: []field{
 			{key: "id", title: "ID"}, {key: "workflow", title: "WORKFLOW"}, {key: "action", title: "ACTION"},
-			{key: "state", title: "STATE"}, {key: "record", title: "FOR"}, envField,
+			{key: "state", title: "STATE"}, {key: "record", title: "FOR"}, projectField, envField,
 			{key: "updated_at", title: "UPDATED", format: output.Ago}, namespaceField,
 		},
 		details: []field{
 			{key: "id", title: "ID"}, {key: "workflow", title: "Workflow"}, {key: "action", title: "Action"},
 			{key: "state", title: "State"}, {key: "namespace", title: "Namespace"}, {key: "record", title: "For"},
-			{key: "record_type", title: "Type"}, {key: "environment_type", title: "Environment"},
+			{key: "record_type", title: "Type"}, {key: "project", title: "Project"}, {key: "environment_type", title: "Environment"},
 			{key: "created_at", title: "Started", format: output.LocalTime},
 			{key: "updated_at", title: "Updated", format: output.LocalTime},
 		},

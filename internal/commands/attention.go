@@ -30,7 +30,7 @@ type attentionSection struct {
 // attentionColumns are the columns of each kind of section.
 var attentionColumns = map[string][]field{
 	"app": {
-		{key: "id", title: "ID"}, {key: "name", title: "APP"}, {key: "environment_type", title: "ENV"},
+		{key: "id", title: "ID"}, {key: "name", title: "APP"}, projectField, {key: "environment_type", title: "ENV"},
 		{key: "state", title: "STATE"}, {key: "backup_health", title: "BACKUPS"},
 		{key: "last_backup_at", title: "LAST BACKUP", format: output.Ago}, {key: "server", title: "SERVER"},
 		namespaceField,
@@ -41,7 +41,7 @@ var attentionColumns = map[string][]field{
 	},
 	"failure": {
 		{key: "run_id", title: "RUN"}, {key: "workflow", title: "WORKFLOW"}, {key: "step", title: "STEP"},
-		{key: "record", title: "FOR"}, envField, {key: "failed_at", title: "FAILED", format: output.Ago},
+		{key: "record", title: "FOR"}, projectField, envField, {key: "failed_at", title: "FAILED", format: output.Ago},
 		{key: "reason", title: "WHY", format: output.FirstLine}, namespaceField,
 	},
 }
