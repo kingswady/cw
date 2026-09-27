@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/zalando/go-keyring"
 )
@@ -51,13 +52,20 @@ func (s KeychainStore) Delete(u string) error {
 	return nil
 }
 
-// FileStore keeps tokens in a JSON file only this user can read.
+// FileStore keeps tokens in a JSON file only this user can read. A Path
+// that is not absolute (no config directory) holds nothing and takes nothing.
 type FileStore struct{ Path string }
 
 func (s FileStore) read() map[string]string {
 	tokens := map[string]string{}
+	if !filepath.IsAbs(s.Path) {
+		return tokens
+	}
 	if raw, err := os.ReadFile(s.Path); err == nil {
 		_ = json.Unmarshal(raw, &tokens)
+	}
+	if tokens == nil { // the file said null
+		tokens = map[string]string{}
 	}
 	return tokens
 }

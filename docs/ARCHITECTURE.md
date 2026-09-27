@@ -33,7 +33,9 @@ cmd/cw                    entry point: builds commands.App with the version, run
   case. A filter with a `narrows` text is also offered by the commands that name such a record (`--app`,
   `cw logs <app>`) — give it one only where the flag cannot collide with that command's own filters.
 - **A column** — the resource's column list; its colour, keyed by the API field, in `output/color.go`.
-- **Anything printed** goes through `output`; **anything kept on the machine** through `config`.
+- **Anything printed** goes through `output`; **anything kept on the machine** through `config`, whose
+  `WritePrivateJSON` writes a synced 0600 temp file and renames it into cw's 0700 directory — never a relative
+  path: without a config directory cw keeps nothing rather than use the current one.
 
 ## Conventions
 

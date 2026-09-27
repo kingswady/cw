@@ -26,12 +26,15 @@ import (
 // App holds everything a command touches, so tests can swap each piece.
 type App struct {
 	// version is this build's (set by the release; "dev" otherwise).
-	version    string
-	stdin      io.Reader
-	stdout     io.Writer
-	stderr     io.Writer
-	getenv     func(string) string
-	configDir  string
+	version   string
+	stdin     io.Reader
+	stdout    io.Writer
+	stderr    io.Writer
+	getenv    func(string) string
+	configDir string
+	// configErr says why there is no configDir: nothing is kept then, never
+	// in the current directory, and commands that must keep something fail with it.
+	configErr  error
 	secrets    config.SecretStore
 	httpClient *http.Client
 	// readSecret prompts for the token without echo; nil when stdin is not a terminal.
@@ -53,11 +56,11 @@ type App struct {
 
 // New is cw as the terminal runs it: this machine's config, keychain and streams.
 func New(version string) *App {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		dir = "."
+	dir, dirErr := configDir()
+	fallback := config.FileStore{}
+	if dirErr == nil {
+		fallback.Path = filepath.Join(dir, "credentials.json")
 	}
-	dir = filepath.Join(dir, "cw")
 	a := &App{
 		version:    version,
 		stdin:      os.Stdin,
@@ -65,7 +68,8 @@ func New(version string) *App {
 		stderr:     os.Stderr,
 		getenv:     os.Getenv,
 		configDir:  dir,
-		secrets:    config.KeychainStore{Fallback: config.FileStore{Path: filepath.Join(dir, "credentials.json")}},
+		configErr:  dirErr,
+		secrets:    config.KeychainStore{Fallback: fallback},
 		httpClient: platform.NewHTTPClient(),
 		interrupt:  signalContext,
 		wait:       sleepOrDone,
@@ -89,10 +93,33 @@ func New(version string) *App {
 	return a
 }
 
+// configDir is cw's directory in the user's config directory ($XDG_CONFIG_HOME
+// or ~/.config, ~/Library/Application Support, %AppData%), else in ~/.config —
+// never a relative one, which would put the token in the current directory.
+func configDir() (string, error) {
+	base, err := os.UserConfigDir()
+	if err == nil && filepath.IsAbs(base) {
+		return filepath.Join(base, "cw"), nil
+	}
+	if home, homeErr := os.UserHomeDir(); homeErr == nil && filepath.IsAbs(home) {
+		return filepath.Join(home, ".config", "cw"), nil
+	}
+	if err == nil {
+		err = fmt.Errorf("%q is not an absolute path", base)
+	}
+	return "", fmt.Errorf("cw has nowhere private to keep its config and token (%v) — set HOME", err)
+}
+
 func (a *App) userAgent() string { return "cw/" + a.version }
 
-func (a *App) loadConfig() config.Config          { return config.Load(a.configDir) }
-func (a *App) saveConfig(cfg config.Config) error { return config.Save(a.configDir, cfg) }
+func (a *App) loadConfig() config.Config { return config.Load(a.configDir) }
+
+func (a *App) saveConfig(cfg config.Config) error {
+	if a.configErr != nil {
+		return a.configErr
+	}
+	return config.Save(a.configDir, cfg)
+}
 
 // platform is the platform to talk to and where that came from; a URL the
 // user got wrong is a command-line mistake.

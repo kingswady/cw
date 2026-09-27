@@ -49,7 +49,8 @@ func (a *App) updateStatePath() string { return filepath.Join(a.configDir, "upda
 // hintUpdate prints one line when a newer release exists: in a terminal only,
 // never in CI, and without asking GitHub more than once a day.
 func (a *App) hintUpdate() {
-	if a.version == "dev" || a.getenv("CI") != "" || a.getenv("CW_NO_UPDATE_CHECK") != "" || !a.stdoutIsTerminal() {
+	if a.version == "dev" || a.configErr != nil || a.getenv("CI") != "" || a.getenv("CW_NO_UPDATE_CHECK") != "" ||
+		!a.stdoutIsTerminal() {
 		return
 	}
 	var state updateState

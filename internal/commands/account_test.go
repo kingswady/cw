@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -152,5 +153,51 @@ func TestUseSwitchesBetweenPlatformsLoggedInTo(t *testing.T) {
 	}
 	if code := h.run("use", "https://three.example"); code != 1 || !strings.Contains(h.stderr.String(), "cw login --url https://three.example") {
 		t.Errorf("exit %d: %s", code, h.stderr)
+	}
+}
+
+func TestWithoutAConfigDirectoryNothingLandsInTheCurrentDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the config directory comes from %AppData% there")
+	}
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	dir, err := configDir()
+	if dir != "" || err == nil || !strings.Contains(err.Error(), "set HOME") {
+		t.Fatalf("configDir() = %q, %v", dir, err)
+	}
+	if a := New("dev"); a.configDir != "" || a.configErr == nil {
+		t.Fatalf("New: dir %q, err %v", a.configDir, a.configErr)
+	}
+	t.Chdir(t.TempDir())
+	h := newHarness(t, fakeAPI(t, map[string]any{"/whoami": map[string]any{"login": "a", "name": "A"}}))
+	h.app.configDir, h.app.configErr = "", err
+	h.app.stdin = strings.NewReader(goodToken)
+	if code := h.run("login", "--with-token"); code != 1 || !strings.Contains(h.stderr.String(), "nowhere private to keep its config and token") {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	if code := h.run("use", "https://other.example"); code == 0 {
+		t.Errorf("use has nothing to save to")
+	}
+	if entries, _ := os.ReadDir("."); len(entries) != 0 {
+		t.Errorf("written into the current directory: %v", entries)
+	}
+	// A command that needs to keep nothing still runs (CW_TOKEN, CW_URL).
+	h.stderr.Reset()
+	if code := h.run("whoami"); code != 0 {
+		t.Errorf("whoami: exit %d: %s", code, h.stderr)
+	}
+}
+
+func TestTheConfigDirectoryFallsBackToHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the config directory comes from %AppData% there")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "relative/dir") // refused by os.UserConfigDir
+	dir, err := configDir()
+	if err != nil || !strings.HasPrefix(dir, home+string(filepath.Separator)) || filepath.Base(dir) != "cw" {
+		t.Errorf("configDir() = %q, %v", dir, err)
 	}
 }

@@ -30,6 +30,9 @@ func (a *App) login(args []string) error {
 	if _, err := parseArgs(fs, args); err != nil {
 		return err
 	}
+	if a.configErr != nil {
+		return a.configErr // before asking for a token there is nowhere to keep
+	}
 	base, source, err := a.platform(*urlFlag)
 	if err != nil {
 		return err
