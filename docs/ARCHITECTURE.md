@@ -19,7 +19,7 @@ cmd/cw                    entry point: builds commands.App with the version, run
 | `mcpbridge`  | `Bridge`: forwards an AI client's messages with the MCP headers the platform checks       | —                                   |
 | `selfupdate` | `LatestTag`, `Fetch`, `ReplaceExecutable`, `Newer`                                         | `platform`                          |
 | `config`     | `Config`, `Resolve` (flag → `CW_URL` → saved → default), `SecretStore`                     | `platform`                          |
-| `output`     | `Table`, `WriteTable`, `Colorize`, `Style`, `Ago`, `LocalTime`                             | —                                   |
+| `output`     | `Clean`, `Text`, `LogLine`, `Table`, `WriteTable`, `Colorize`, `Style`, `Ago`, `LocalTime` | —                                   |
 | `platform`   | `Client.Get`, `APIError`, `NormalizeURL` (never plain http off this machine), no redirects | —                                   |
 
 ## Where things go
@@ -41,6 +41,8 @@ cmd/cw                    entry point: builds commands.App with the version, run
   or an HTTP 400), `3` `cw attention` found something.
 - **A token goes only where the user sent it:** https (or this machine), no redirects, never on the command line.
 - **Colour only in a terminal**, unless `--color always`; `NO_COLOR` is honoured; JSON is never coloured.
+- **What the platform says is `output.Clean` before it is printed** — no control characters but tab and
+  newline; `Text` (every cell), `LogLine` and error output do it, and cw's own colours come after.
 - **Tests sit beside the code.** Command tests run the real command line against a fake API (`newHarness`,
   `fakeAPI` in `commands/cli_test.go`); lower layers are tested directly.
 - **Release:** push a tag `vX.Y.Z`. GoReleaser builds `./cmd/cw` and stamps `-X main.version`; `cw update`

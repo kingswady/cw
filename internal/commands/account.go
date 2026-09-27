@@ -58,7 +58,7 @@ func (a *App) login(args []string) error {
 	if me == nil {
 		fmt.Fprintf(a.stdout, "Logged in to %s (this token may not read your identity).\n", base)
 	} else {
-		fmt.Fprintf(a.stdout, "Logged in to %s as %s (%s).\n", base, me.Name, me.Login)
+		fmt.Fprintf(a.stdout, "Logged in to %s as %s (%s).\n", base, output.Clean(me.Name), output.Clean(me.Login))
 	}
 	fmt.Fprintf(a.stdout, "Token saved in %s.\n", where)
 	return nil
@@ -140,14 +140,14 @@ func (a *App) whoami(args []string) error {
 	if err := platform.Decode(raw, &me); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stdout, "%s (%s) on %s\n", me.Name, me.Login, c.Base)
+	fmt.Fprintf(a.stdout, "%s (%s) on %s\n", output.Clean(me.Name), output.Clean(me.Login), c.Base)
 	if expires, ok := output.ParseTime(c.TokenExpires); ok {
 		fmt.Fprintf(a.stdout, "Token expires %s (%s)\n", expires.Local().Format("2006-01-02 15:04"), output.Until(a.clock(), expires))
 	}
 	fmt.Fprintln(a.stdout)
 	rows := make([][]string, 0, len(me.Namespaces))
 	for _, ns := range me.Namespaces {
-		rows = append(rows, []string{ns.Name, ns.Code, ns.Level})
+		rows = append(rows, []string{output.Clean(ns.Name), output.Clean(ns.Code), output.Clean(ns.Level)})
 	}
 	return output.WriteTable(a.stdout, output.Table{Color: color}.Headers([]string{"NAMESPACE", "CODE", "LEVEL"}), rows)
 }

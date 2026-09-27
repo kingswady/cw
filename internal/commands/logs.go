@@ -104,11 +104,11 @@ func (a *App) followLogs(c *platform.Client, id, cursor string, out logOutput) e
 		case errors.As(err, &refused) && refused.Status == http.StatusTooManyRequests:
 			// The platform's rate limit: wait as long as it says, then follow on.
 			pause = max(refused.RetryAfter, followInterval)
-			fmt.Fprintln(a.stderr, "cw:", err, "— waiting, then following on")
+			fmt.Fprintln(a.stderr, "cw:", output.Clean(err.Error()), "— waiting, then following on")
 		case errors.As(err, &refused) && refused.Status >= 400 && refused.Status < 500:
 			return err
 		default:
-			fmt.Fprintln(a.stderr, "cw:", err, "— retrying")
+			fmt.Fprintln(a.stderr, "cw:", output.Clean(err.Error()), "— retrying")
 		}
 	}
 }
@@ -151,11 +151,7 @@ func (a *App) printLogs(c *platform.Client, id string, query url.Values, out log
 		return page, output.WriteJSON(a.stdout, raw)
 	}
 	for _, item := range page.Items {
-		line := strings.TrimRight(item.Line, "\n ")
-		if out.color {
-			line = output.Colorize(line, out.grep)
-		}
-		fmt.Fprintln(a.stdout, line)
+		fmt.Fprintln(a.stdout, output.LogLine(strings.TrimRight(item.Line, "\n "), out.color, out.grep))
 	}
 	return page, nil
 }

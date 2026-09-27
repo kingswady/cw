@@ -67,3 +67,19 @@ func TestSSLStatusIsColoured(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestALogLineIsCleanedBeforeItIsColoured(t *testing.T) {
+	entry := "2026-09-26 13:16:25,466 56 ERROR v19-0 odoo.http: boom\x1b[2J\x1b]0;owned\x07\nTraceback\r"
+	got := LogLine(entry, true, "")
+	for _, evil := range []string{"\x1b[2J", "\x1b]0", "\x07", "\r"} {
+		if strings.Contains(got, evil) {
+			t.Errorf("%q survived: %q", evil, got)
+		}
+	}
+	if !strings.Contains(got, "\x1b[1;31mERROR") {
+		t.Errorf("cw's own colours come after: %q", got)
+	}
+	if plain := LogLine(entry, false, ""); strings.ContainsRune(plain, 0x1b) || !strings.Contains(plain, "boom[2J]0;owned\nTraceback") {
+		t.Errorf("plain: %q", plain)
+	}
+}

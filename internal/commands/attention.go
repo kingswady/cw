@@ -116,7 +116,7 @@ func (a *App) printAttention(sections []attentionSection, out output.Table) erro
 		if i > 0 {
 			fmt.Fprintln(a.stdout)
 		}
-		title := fmt.Sprintf("%-8s%d %s", strings.ToUpper(section.Severity), section.Count, section.Label)
+		title := fmt.Sprintf("%-8s%d %s", strings.ToUpper(output.Clean(section.Severity)), section.Count, output.Clean(section.Label))
 		if out.Color {
 			title = output.Paint(output.Bold+severityColor[section.Severity], title)
 		}

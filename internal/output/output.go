@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -18,13 +19,38 @@ const legacyTime = "2006-01-02 15:04:05"
 // now is swapped in tests.
 var now = time.Now
 
+// Clean is text from the platform made safe for a terminal: control
+// characters (C0, DEL, C1: ESC, CSI, BEL, a carriage return that overwrites
+// the line) are dropped, all but tab and newline. It is the one place this
+// happens — everything the platform says passes through it (Text, LogLine,
+// error messages) before cw adds colours of its own.
+func Clean(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\t' && r != '\n' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// WriteJSON indents the API's JSON. JSON has no raw C0 characters, but it
+// may carry DEL and C1 ones raw (U+009B is a CSI to some terminals): they
+// are written as \u escapes, the same JSON value.
 func WriteJSON(w io.Writer, raw json.RawMessage) error {
 	var out bytes.Buffer
 	if err := json.Indent(&out, raw, "", "  "); err != nil {
 		return err
 	}
-	out.WriteByte('\n')
-	_, err := out.WriteTo(w)
+	var safe strings.Builder
+	for _, r := range out.String() {
+		if unicode.IsControl(r) && r >= 0x7f {
+			fmt.Fprintf(&safe, "\\u%04x", r)
+			continue
+		}
+		safe.WriteRune(r)
+	}
+	safe.WriteByte('\n')
+	_, err := io.WriteString(w, safe.String())
 	return err
 }
 
@@ -36,12 +62,22 @@ func visibleWidth(s string) int {
 	return utf8.RuneCountInString(ansiEscape.ReplaceAllString(s, ""))
 }
 
+var oneLine = strings.NewReplacer("\n", " ", "\t", " ")
+
 // writeTable aligns rows under headers by visible width (text/tabwriter would
 // count colour codes as characters); nil headers print rows only.
 func WriteTable(w io.Writer, headers []string, rows [][]string) error {
-	all := rows
+	all := make([][]string, 0, len(rows)+1)
 	if headers != nil {
-		all = append([][]string{headers}, rows...)
+		all = append(all, headers)
+	}
+	for _, row := range rows {
+		// One line per row: a newline or tab inside a value would forge a row or shift a column.
+		cells := make([]string, len(row))
+		for i, cell := range row {
+			cells[i] = oneLine.Replace(cell)
+		}
+		all = append(all, cells)
 	}
 	var widths []int
 	for _, row := range all {
@@ -67,7 +103,7 @@ func WriteTable(w io.Writer, headers []string, rows [][]string) error {
 	return nil
 }
 
-// text renders one JSON value for a cell: null and "" read as "-".
+// Text renders one JSON value for a cell, Clean: null and "" read as "-".
 func Text(value any) string {
 	switch v := value.(type) {
 	case nil:
@@ -76,7 +112,7 @@ func Text(value any) string {
 		if v == "" {
 			return "-"
 		}
-		return v
+		return Clean(v)
 	case bool:
 		if v {
 			return "yes"
@@ -85,7 +121,7 @@ func Text(value any) string {
 	case json.Number:
 		return v.String()
 	default:
-		return fmt.Sprint(v)
+		return Clean(fmt.Sprint(v))
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/kingswady/cw/internal/config"
+	"github.com/kingswady/cw/internal/output"
 	"github.com/kingswady/cw/internal/platform"
 	"github.com/kingswady/cw/internal/selfupdate"
 )
@@ -197,10 +198,11 @@ func (a *App) exit(err error) int {
 		return exitAttention
 	case errors.As(err, &usage), errors.As(err, &refused) && refused.Status == http.StatusBadRequest:
 		// A 400 is the platform saying the command line was wrong (--limit 0).
-		fmt.Fprintln(a.stderr, "cw:", err)
+		fmt.Fprintln(a.stderr, "cw:", output.Clean(err.Error()))
 		return 2
 	default:
-		fmt.Fprintln(a.stderr, "cw:", err)
+		// An error may carry the platform's own message: Clean, like all it says.
+		fmt.Fprintln(a.stderr, "cw:", output.Clean(err.Error()))
 		return 1
 	}
 }

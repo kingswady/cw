@@ -35,7 +35,17 @@ var levelColor = map[string]string{
 // messageColor makes the message of a problem stand out; routine lines stay plain.
 var messageColor = map[string]string{"WARNING": Yellow, "ERROR": Red, "CRITICAL": Red}
 
-// colorize renders one log entry (it may span lines: a traceback) for a terminal.
+// LogLine is one log entry from the platform as cw prints it: Clean, then
+// coloured for a terminal when color is on.
+func LogLine(entry string, color bool, grep string) string {
+	entry = Clean(entry)
+	if !color {
+		return entry
+	}
+	return Colorize(entry, grep)
+}
+
+// Colorize renders one log entry (it may span lines: a traceback) for a terminal.
 func Colorize(entry, grep string) string {
 	lines := strings.Split(entry, "\n")
 	match := odooLine.FindStringSubmatch(lines[0])
