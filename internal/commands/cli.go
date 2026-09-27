@@ -83,14 +83,49 @@ func New(version string) *App {
 		clock:      time.Now,
 	}
 	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-		a.readSecret = func(prompt string) (string, error) {
-			fmt.Fprint(a.stderr, prompt)
-			raw, err := term.ReadPassword(fd)
-			fmt.Fprintln(a.stderr)
-			return string(raw), err
-		}
+		a.readSecret = func(prompt string) (string, error) { return readHidden(fd, a.stderr, prompt) }
 	}
 	return a
+}
+
+// exitInterrupted is the exit code of a command stopped by Ctrl-C (128 + SIGINT).
+const exitInterrupted = 130
+
+// readHidden reads a line from the terminal without echo. The default Ctrl-C
+// would end cw with echo still off; this one restores the terminal first.
+func readHidden(fd int, stderr io.Writer, prompt string) (string, error) {
+	state, err := term.GetState(fd)
+	if err != nil {
+		return "", err
+	}
+	stop := onInterrupt(func() {
+		_ = term.Restore(fd, state)
+		fmt.Fprintln(stderr)
+		os.Exit(exitInterrupted)
+	})
+	defer stop()
+	fmt.Fprint(stderr, prompt)
+	raw, err := term.ReadPassword(fd)
+	fmt.Fprintln(stderr)
+	return string(raw), err
+}
+
+// onInterrupt runs fn on Ctrl-C instead of the default handler, until stop.
+func onInterrupt(fn func()) (stop func()) {
+	signals := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	signal.Notify(signals, os.Interrupt)
+	go func() {
+		select {
+		case <-signals:
+			fn()
+		case <-done:
+		}
+	}()
+	return func() {
+		signal.Stop(signals)
+		close(done)
+	}
 }
 
 // configDir is cw's directory in the user's config directory ($XDG_CONFIG_HOME
