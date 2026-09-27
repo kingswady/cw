@@ -45,7 +45,9 @@ func LogLine(entry string, color bool, grep string) string {
 	return Colorize(entry, grep)
 }
 
-// Colorize renders one log entry (it may span lines: a traceback) for a terminal.
+// Colorize renders one log entry (it may span lines: a traceback) for a
+// terminal. Every --grep match is found on the plain text first, so a match
+// never lands inside a colour code, nor breaks where one begins.
 func Colorize(entry, grep string) string {
 	lines := strings.Split(entry, "\n")
 	match := odooLine.FindStringSubmatch(lines[0])
@@ -54,14 +56,11 @@ func Colorize(entry, grep string) string {
 	}
 	timestamp, pid, level, db, logger, message := match[1], match[2], match[3], match[4], match[5], match[6]
 	tint := messageColor[level]
-	if logger == "werkzeug" {
-		message = colorStatus(message)
-	}
 	var out strings.Builder
 	out.WriteString(Dim + timestamp + " " + pid + Reset + " ")
 	out.WriteString(levelColor[level] + level + Reset + " ")
 	out.WriteString(Cyan + db + Reset + " " + Dim + logger + ":" + Reset + " ")
-	out.WriteString(Paint(tint, highlight(message, grep)))
+	out.WriteString(paintMessage(message, tint, logger == "werkzeug", grep))
 	continuation := tint
 	if continuation == "" {
 		continuation = Dim
@@ -79,33 +78,67 @@ func Paint(color, text string) string {
 	return color + text + Reset
 }
 
-func colorStatus(message string) string {
-	return httpStatus.ReplaceAllStringFunc(message, func(found string) string {
-		parts := httpStatus.FindStringSubmatch(found)
-		color := map[byte]string{'2': Green, '3': Cyan, '4': Yellow, '5': Red}[parts[2][0]]
-		return parts[1] + Paint(color, parts[2]) + parts[3]
-	})
+var statusColor = map[byte]string{'2': Green, '3': Cyan, '4': Yellow, '5': Red}
+
+// paintMessage is message in tint, with a werkzeug request line's HTTP status
+// in its class's colour — the tint resumes after it — and grep's matches marked.
+func paintMessage(message, tint string, request bool, grep string) string {
+	found := matches(message, grep)
+	var out strings.Builder
+	at := 0
+	if request {
+		for _, m := range httpStatus.FindAllStringSubmatchIndex(message, -1) {
+			start, end := m[4], m[5] // the status digits
+			out.WriteString(Paint(tint, marked(message, found, at, start)))
+			out.WriteString(Paint(statusColor[message[start]], marked(message, found, start, end)))
+			at = end
+		}
+	}
+	out.WriteString(Paint(tint, marked(message, found, at, len(message))))
+	return out.String()
 }
 
 // highlight marks every case-insensitive occurrence of grep in text.
 func highlight(text, grep string) string {
+	return marked(text, matches(text, grep), 0, len(text))
+}
+
+// matches is where grep occurs in text, any case, as [start, end) byte offsets.
+func matches(text, grep string) [][2]int {
 	if grep == "" {
-		return text
+		return nil
 	}
 	lower, needle := strings.ToLower(text), strings.ToLower(grep)
 	if len(lower) != len(text) { // a case fold changed byte lengths: offsets would not line up
-		return text
+		return nil
 	}
-	var out strings.Builder
-	for {
-		i := strings.Index(lower, needle)
+	var found [][2]int
+	for at := 0; ; {
+		i := strings.Index(lower[at:], needle)
 		if i < 0 {
-			out.WriteString(text)
-			return out.String()
+			return found
 		}
-		out.WriteString(text[:i] + reverse + text[i:i+len(needle)] + reverseOff)
-		text, lower = text[i+len(needle):], lower[i+len(needle):]
+		found = append(found, [2]int{at + i, at + i + len(needle)})
+		at += i + len(needle)
 	}
+}
+
+// marked is text[from:to] with the parts of found inside it in reverse video.
+// found holds offsets in the whole text, so a match cut by a colour change is
+// marked on both sides of it.
+func marked(text string, found [][2]int, from, to int) string {
+	var out strings.Builder
+	at := from
+	for _, m := range found {
+		start, end := max(m[0], at), min(m[1], to)
+		if start >= end {
+			continue
+		}
+		out.WriteString(text[at:start] + reverse + text[start:end] + reverseOff)
+		at = end
+	}
+	out.WriteString(text[at:to])
+	return out.String()
 }
 
 // Column colours, keyed by the API field, in the dashboard's own language:

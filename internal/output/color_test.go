@@ -83,3 +83,31 @@ func TestALogLineIsCleanedBeforeItIsColoured(t *testing.T) {
 		t.Errorf("plain: %q", plain)
 	}
 }
+
+const requestLine = `2026-09-26 13:16:25,466 56 INFO v19-0 werkzeug: 1.2.3.4 - - [26/Sep/2026] "GET / HTTP/1.1" 200 - 3`
+
+func TestGrepNeverMatchesInsideAColourCode(t *testing.T) {
+	// "32" is not in the line — only in the green of its status, \x1b[32m.
+	if got, want := Colorize(requestLine, "32"), Colorize(requestLine, ""); got != want {
+		t.Errorf("a match inside an escape code:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestGrepMatchesAcrossTheColouredStatus(t *testing.T) {
+	got := Colorize(requestLine, `1.1" 200 -`)
+	if plain := ansiEscape.ReplaceAllString(got, ""); plain != requestLine {
+		t.Errorf("the text changed:\n%q\n%q", plain, requestLine)
+	}
+	for _, want := range []string{reverse + `1.1" ` + reverseOff, Green + reverse + "200" + reverseOff + Reset, reverse + " -" + reverseOff} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
+		}
+	}
+}
+
+func TestTheMessageTintResumesAfterTheStatus(t *testing.T) {
+	line := strings.Replace(requestLine, " INFO ", " WARNING ", 1)
+	if got := Colorize(line, ""); !strings.Contains(got, Green+"200"+Reset+Yellow+" - 3"+Reset) {
+		t.Errorf("the rest of a warning is still yellow: %q", got)
+	}
+}
