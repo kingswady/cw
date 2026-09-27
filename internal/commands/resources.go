@@ -322,9 +322,14 @@ func (a *App) resource(res *resource, args []string) error {
 		return err
 	}
 	if opts.named != nil && *opts.filters[opts.named.flag] == "" {
-		if stray := sortedFlags(given(opts.narrow), narrowing(resourceNamed(opts.named.lookup))); len(stray) > 0 {
-			return usagef("%s only narrow which app --%s names; add --%s <name>",
-				joinFlags(stray, "and"), opts.named.flag, opts.named.flag)
+		target := resourceNamed(opts.named.lookup)
+		if stray := sortedFlags(given(opts.narrow), narrowing(target)); len(stray) > 0 {
+			verb := "narrow"
+			if len(stray) == 1 {
+				verb = "narrows"
+			}
+			return usagef("%s only %s which %s --%s names; add --%s <name>",
+				joinFlags(stray, "and"), verb, target.singular, opts.named.flag, opts.named.flag)
 		}
 	}
 	color, err := a.useColor(opts.color, opts.json)

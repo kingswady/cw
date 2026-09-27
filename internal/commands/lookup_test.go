@@ -177,6 +177,10 @@ func TestNarrowingWithoutAppIsAMistake(t *testing.T) {
 	if !strings.Contains(h.stderr.String(), "--project and --env only narrow which app --app names; add --app <name>") {
 		t.Errorf("stderr:\n%s", h.stderr)
 	}
+	one := newHarness(t, fakeAPI(t, nil))
+	if code := one.run("runs", "--server", "prod-1"); code != 2 || !strings.Contains(one.stderr.String(), "--server only narrows which app --app names") {
+		t.Errorf("exit %d: %s", code, one.stderr)
+	}
 }
 
 func TestShowRefusesSearch(t *testing.T) {
