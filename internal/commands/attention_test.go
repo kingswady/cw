@@ -83,3 +83,28 @@ func TestAnOlderPlatformSaysItHasNoAttentionYet(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, h.stderr)
 	}
 }
+
+func TestASectionOfAnUnknownKindStillShowsItsRecords(t *testing.T) {
+	h := newHarness(t, fakeAPI(t, map[string]any{"/attention": map[string]any{"sections": []map[string]any{
+		{"rule": "quota_near", "severity": "warning", "label": "Namespace(s) near their quota", "kind": "quota", "count": 2,
+			"items": []map[string]any{
+				{"id": 3, "name": "acme", "namespace": "acme", "used": 0.93},
+				{"id": 4, "name": "beta", "namespace": "beta", "used": 0.91},
+			}},
+	}}}))
+	if code := h.run("attention"); code != exitAttention {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	out := h.stdout.String()
+	for _, want := range []string{"WARNING 2 Namespace(s) near their quota", "  ID  NAME  NAMESPACE", "  3   acme  acme", "  4   beta  beta"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n")[1:] {
+		if strings.TrimSpace(line) == "" {
+			t.Errorf("a blank row for each record:\n%s", out)
+			break
+		}
+	}
+}

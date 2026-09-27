@@ -46,6 +46,10 @@ var attentionColumns = map[string][]field{
 	},
 }
 
+// genericColumns are for a kind of section this cw does not know yet (a
+// newer platform's rule): what every record has.
+var genericColumns = []field{{key: "id", title: "ID"}, {key: "name", title: "NAME"}, namespaceField}
+
 var severityColor = map[string]string{"danger": output.Red, "warning": output.Yellow}
 
 func (a *App) attention(args []string) error {
@@ -136,8 +140,12 @@ func (a *App) printSection(section attentionSection, out output.Table) error {
 	if len(section.Items) == 0 {
 		return nil
 	}
+	columns, known := attentionColumns[section.Kind]
+	if !known {
+		columns = genericColumns
+	}
 	var table bytes.Buffer
-	if err := writeRecords(&table, attentionColumns[section.Kind], section.Items, out); err != nil {
+	if err := writeRecords(&table, columns, section.Items, out); err != nil {
 		return err
 	}
 	for _, line := range strings.SplitAfter(strings.TrimSuffix(table.String(), "\n"), "\n") {
