@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,7 +31,42 @@ func (m memoryStore) Delete(u string) error               { delete(m, u); return
 // fakeAPI answers like /api/v1: routes map a path to the "data" it returns.
 func fakeAPI(t *testing.T, routes map[string]any) *httptest.Server {
 	t.Helper()
+	server, _ := recordedAPI(t, routes)
+	return server
+}
+
+// requests are what a fake API was asked, each as "path?query" (the query
+// sorted by url.Values.Encode, like the route keys).
+type requests struct {
+	mu   sync.Mutex
+	seen []string
+}
+
+func (r *requests) add(req *http.Request) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.seen = append(r.seen, strings.TrimPrefix(req.URL.Path, "/api/v1")+"?"+req.URL.Query().Encode())
+}
+
+// to is the requests whose path is path, in order.
+func (r *requests) to(path string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var matching []string
+	for _, seen := range r.seen {
+		if strings.HasPrefix(seen, path+"?") {
+			matching = append(matching, seen)
+		}
+	}
+	return matching
+}
+
+// recordedAPI is fakeAPI that also records every request.
+func recordedAPI(t *testing.T, routes map[string]any) (*httptest.Server, *requests) {
+	t.Helper()
+	seen := &requests{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.add(r)
 		w.Header().Set("Content-Type", "application/json")
 		if r.Header.Get("Authorization") != "Bearer "+goodToken {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -52,7 +88,7 @@ func fakeAPI(t *testing.T, routes map[string]any) *httptest.Server {
 		json.NewEncoder(w).Encode(map[string]any{"data": data})
 	}))
 	t.Cleanup(server.Close)
-	return server
+	return server, seen
 }
 
 type harness struct {

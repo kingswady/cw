@@ -65,6 +65,30 @@ cw runs --app shop --state error
 cw runs show 4812                # steps, and why a failed step failed
 ```
 
+### Names several records share
+
+An app, server or installer can be named by id or by name. When several share a name, cw lists them and asks
+for one — or narrow the name with the same filters the list takes:
+
+```bash
+cw apps show v19-0 --project internal --env production
+cw servers show prod-1 --namespace acme
+cw installers show grafana --server prod-1
+```
+
+Commands that name an app — `--app` on `backups` and `runs`, and `cw logs <app>` — take `--project`, `--env`,
+`--server` (id or name), `--version` and `--edition` to narrow which app the name means:
+
+```bash
+cw backups --app v19-0 --project internal
+cw runs --app v19-0 --env production --state error
+cw logs v19-0 --project internal --follow
+```
+
+They only pick the app; they never filter the backups or runs themselves, and `--state` stays the command's own
+(the runs' state, not the app's). `--namespace` narrows both. An id is taken as given. If nothing matches, cw
+says which filters it applied; if several still do, it lists them and the flags left to narrow with.
+
 Every read command takes `--json` (the API's own response, for `jq`), `--namespace <code>`, `--limit`,
 `--offset` and `--color auto|always|never` (coloured in a terminal unless `NO_COLOR` is set). `apps`, `servers`
 and `installers` leave deleted records out unless `--all`. A token never sees more than its namespaces and your own access, whatever you ask for.

@@ -35,8 +35,13 @@ func (a *App) logs(args []string) error {
 	asJSON := fs.Bool("json", false, "print each API answer as JSON")
 	namespace := fs.String("namespace", "", "look the app up in this namespace only")
 	colorMode := fs.String("color", "auto", "auto (in a terminal, unless NO_COLOR is set), always or never")
+	apps := resourceNamed("apps")
+	narrow := narrowFlags(fs, apps, "<app>")
 	fs.Usage = func() {
-		fmt.Fprintf(a.stderr, "Usage: cw logs <app> [flags]\n\nThe app's Odoo log, newest last.\n\nFlags:\n")
+		fmt.Fprintf(a.stderr, "Usage: cw logs <app> [flags]\n\nThe app's Odoo log, newest last.\n\n"+
+			"<app> is an id or a name. Where several apps share the name,\n"+
+			"%s narrow which one it means:\n  cw logs v19-0 --project internal --env production\n\nFlags:\n",
+			joinFlags(narrowing(apps), "and"))
 		fs.PrintDefaults()
 	}
 	positional, err := parseArgs(fs, args)
@@ -55,7 +60,9 @@ func (a *App) logs(args []string) error {
 	if err != nil {
 		return err
 	}
-	id, err := a.resolveID(c, resourceNamed("apps"), positional[0], *namespace, false, output.Table{Color: color})
+	id, err := a.resolveID(c, apps, positional[0], scope{
+		namespace: *namespace, filters: given(narrow), offered: narrowing(apps),
+	}, output.Table{Color: color})
 	if err != nil {
 		return err
 	}

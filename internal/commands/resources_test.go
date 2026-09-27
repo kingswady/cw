@@ -98,7 +98,7 @@ func TestAllOnAnOlderPlatformFallsBackToItsFullList(t *testing.T) {
 func TestShowAllFindsADeletedAppByName(t *testing.T) {
 	deleted := map[string]any{"items": []map[string]any{{"id": 5, "name": "old", "namespace": "acme", "state": "delete"}}, "total": 1}
 	server := fakeAPI(t, map[string]any{
-		"/apps?include_deleted=true&limit=200&offset=0": deleted,
+		"/apps?include_deleted=true&limit=200&offset=0&search=old": deleted,
 		"/apps":   map[string]any{"items": []map[string]any{}, "total": 0},
 		"/apps/5": map[string]any{"id": 5, "name": "old", "state": "delete"},
 	})
@@ -195,7 +195,7 @@ func TestAnAmbiguousNameListsTheCandidatesAsATable(t *testing.T) {
 			t.Errorf("missing %q in the table:\n%s", want, table)
 		}
 	}
-	if !strings.Contains(h.stderr.String(), `cw: use one of these ids instead of "shop", or narrow it with --namespace`) {
+	if !strings.Contains(h.stderr.String(), `cw: use one of these ids instead of "shop", or narrow it with --project, --env, --server, --version, --edition or --namespace`) {
 		t.Errorf("stderr:\n%s", h.stderr)
 	}
 	if h.stdout.Len() != 0 {

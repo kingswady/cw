@@ -27,6 +27,11 @@ cmd/cw                    entry point: builds commands.App with the version, run
 - **A read command over an API function** — a `resource` entry in `commands/resources.go` (list, `show`,
   filters, columns). Anything else gets its own file in `commands/`. Commands reach the platform only through
   `platform.Client`.
+- **A name lookup** — `resolveID` in `commands/resources.go`, the one place a name becomes an id. It asks the
+  list with the lookup's `scope` (namespace, `--all`, the filters given) and, where the resource has a
+  `nameSearch` parameter (apps: `search`), only for the names containing it; it keeps the exact matches, any
+  case. A filter with a `narrows` text is also offered by the commands that name such a record (`--app`,
+  `cw logs <app>`) — give it one only where the flag cannot collide with that command's own filters.
 - **A column** — the resource's column list; its colour, keyed by the API field, in `output/color.go`.
 - **Anything printed** goes through `output`; **anything kept on the machine** through `config`.
 

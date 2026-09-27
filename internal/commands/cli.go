@@ -235,6 +235,12 @@ Flags on every read command
   --limit <n>         Rows per page (1-200, default 50)
   --offset <n>        Rows to skip
 
+Names
+  An app, server or installer is an id or a name. A name several share is narrowed
+  with the list's filters: cw apps show v19-0 --project internal --env production
+  --app (backups, runs) and cw logs <app> take --project, --env, --server, --version
+  and --edition for that; they narrow only which app is meant (runs --state is the runs').
+
 Environment
   CW_URL     Platform URL (default `+config.DefaultURL+`)
   CW_TOKEN   API token; overrides the saved one (for CI)
