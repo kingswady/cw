@@ -29,7 +29,7 @@ type Bridge struct {
 	HTTP      *http.Client
 	UserAgent string
 	Out, Log  io.Writer
-	mu        sync.Mutex // guards Out and version
+	mu        sync.Mutex // guards Out, Log and version
 	// version is what a 2025 client agreed in initialize; later requests repeat it.
 	version string
 }
@@ -59,45 +59,96 @@ func (b *Bridge) Serve(in io.Reader) error {
 }
 
 type mcpMessage struct {
-	ID     json.RawMessage `json:"id"`
-	Method string          `json:"method"`
-	Params struct {
-		Name            string                     `json:"name"`
-		URI             string                     `json:"uri"`
-		ProtocolVersion string                     `json:"protocolVersion"`
-		Meta            map[string]json.RawMessage `json:"_meta"`
-	} `json:"params"`
+	ID     json.RawMessage
+	Method string
+	// request: an id and a method — the one kind of message that gets an
+	// answer. A notification (no id) or the client's answer to the
+	// platform (an id, no method) never does.
+	request bool
+	Params  struct {
+		Name            string
+		URI             string
+		ProtocolVersion string
+		Meta            map[string]json.RawMessage
+	}
+}
+
+// parseMessage reads what the bridge needs of a message, leniently: an id is
+// never lost to params of a shape the bridge does not know — the platform
+// judges those, and its answer carries the id back.
+func parseMessage(raw []byte) (*mcpMessage, error) {
+	var envelope struct {
+		ID     json.RawMessage `json:"id"`
+		Method json.RawMessage `json:"method"`
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, err
+	}
+	msg := &mcpMessage{ID: envelope.ID, request: len(envelope.ID) > 0 && len(envelope.Method) > 0}
+	_ = json.Unmarshal(envelope.Method, &msg.Method)
+	var params map[string]json.RawMessage
+	if json.Unmarshal(envelope.Params, &params) == nil {
+		_ = json.Unmarshal(params["name"], &msg.Params.Name)
+		_ = json.Unmarshal(params["uri"], &msg.Params.URI)
+		_ = json.Unmarshal(params["protocolVersion"], &msg.Params.ProtocolVersion)
+		_ = json.Unmarshal(params["_meta"], &msg.Params.Meta)
+	}
+	return msg, nil
 }
 
 func (b *Bridge) forward(raw []byte) {
-	var msg mcpMessage
-	if err := json.Unmarshal(raw, &msg); err != nil {
+	if !json.Valid(raw) {
 		b.reply(nil, -32700, "Parse error")
+		return
+	}
+	msg, err := parseMessage(raw)
+	if err != nil { // valid JSON, but no single message: a batch, a number
+		b.reply(nil, -32600, "Invalid Request: one JSON-RPC message object per line")
 		return
 	}
 	req, err := http.NewRequest(http.MethodPost, b.Endpoint, bytes.NewReader(raw))
 	if err != nil {
-		b.reply(msg.ID, -32603, err.Error())
+		b.fail(msg, err.Error())
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+b.Token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("User-Agent", b.UserAgent)
-	req.Header.Set("Mcp-Method", msg.Method)
+	if msg.Method != "" {
+		req.Header.Set("Mcp-Method", msg.Method)
+	}
 	if mcpNamed[msg.Method] {
 		req.Header.Set("Mcp-Name", headerSafe(msg.Params.Name+msg.Params.URI))
 	}
-	if v := b.versionFor(&msg); v != "" {
+	if v := b.versionFor(msg); v != "" {
 		req.Header.Set("MCP-Protocol-Version", v)
 	}
 	resp, err := b.HTTP.Do(req)
 	if err != nil {
-		b.reply(msg.ID, -32603, fmt.Sprintf("cannot reach %s: %v", b.Endpoint, err))
+		b.fail(msg, fmt.Sprintf("cannot reach %s: %v", b.Endpoint, err))
 		return
 	}
 	defer resp.Body.Close()
-	b.relay(&msg, resp)
+	b.relay(msg, resp)
+}
+
+// fail answers a request with an internal error. Nothing may answer a
+// notification or a response, so their failure goes to the log.
+func (b *Bridge) fail(msg *mcpMessage, reason string) {
+	if !msg.request {
+		b.logf("cw mcp: %s: %s", describe(msg), reason)
+		return
+	}
+	b.reply(msg.ID, -32603, reason)
+}
+
+func describe(msg *mcpMessage) string {
+	if msg.Method != "" {
+		return msg.Method
+	}
+	return "a response"
 }
 
 // versionFor is the MCP-Protocol-Version header: the request's own _meta version
@@ -115,50 +166,92 @@ func (b *Bridge) versionFor(msg *mcpMessage) string {
 	return b.version
 }
 
+// relay passes the platform's answer to msg on. A request always gets one:
+// the platform's own, when it is a JSON-RPC response for msg's id, or an
+// error saying what came instead.
 func (b *Bridge) relay(msg *mcpMessage, resp *http.Response) {
-	if len(msg.ID) == 0 || resp.StatusCode == http.StatusAccepted {
-		return // a notification: nothing to answer
+	if !msg.request {
+		if resp.StatusCode >= 300 {
+			b.logf("cw mcp: %s refused %s (HTTP %d)", b.Endpoint, describe(msg), resp.StatusCode)
+		}
+		return
 	}
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		b.relayEvents(resp.Body)
+		b.relayEvents(msg, resp.Body)
 		return
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-	var answer struct {
-		Result struct {
-			ProtocolVersion string `json:"protocolVersion"`
-		} `json:"result"`
-	}
-	if !json.Valid(body) || json.Unmarshal(body, &answer) != nil {
-		b.reply(msg.ID, -32603, fmt.Sprintf("%s answered HTTP %d, not MCP — is the URL right?", b.Endpoint, resp.StatusCode))
+	if !b.isAnswer(msg, body) {
+		b.reply(msg.ID, -32603, fmt.Sprintf("%s answered HTTP %d, not an MCP answer to this request — is the URL right?",
+			b.Endpoint, resp.StatusCode))
 		return
-	}
-	if msg.Method == "initialize" && answer.Result.ProtocolVersion != "" {
-		b.mu.Lock()
-		b.version = answer.Result.ProtocolVersion
-		b.mu.Unlock()
 	}
 	b.write(body)
 }
 
-// relayEvents passes on each message of an SSE response, in order.
-func (b *Bridge) relayEvents(body io.Reader) {
+// relayEvents passes on each message of an SSE response, in order, and
+// answers the request itself when the stream ends — or breaks — without
+// the platform's answer.
+func (b *Bridge) relayEvents(msg *mcpMessage, body io.Reader) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64<<10), 32<<20)
-	var data bytes.Buffer
+	answered := false
+	var data []string
+	flush := func() {
+		if len(data) == 0 {
+			return
+		}
+		event := []byte(strings.Join(data, "\n")) // an event's data lines, joined as SSE joins them
+		data = data[:0]
+		answered = b.isAnswer(msg, event) || answered
+		b.write(event)
+	}
 	for scanner.Scan() {
 		line := scanner.Text()
 		switch {
 		case strings.HasPrefix(line, "data:"):
-			data.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
-		case line == "" && data.Len() > 0:
-			b.write(data.Bytes())
-			data.Reset()
+			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+		case line == "":
+			flush()
 		}
 	}
-	if data.Len() > 0 {
-		b.write(data.Bytes())
+	if err := scanner.Err(); err != nil {
+		// A cut-off event is not passed on: half a message is no message.
+		b.reply(msg.ID, -32603, fmt.Sprintf("the stream from %s broke before its answer: %v", b.Endpoint, err))
+		return
 	}
+	flush()
+	if !answered {
+		b.reply(msg.ID, -32603, fmt.Sprintf("the stream from %s ended without an answer to this request", b.Endpoint))
+	}
+}
+
+// isAnswer reports whether message is the JSON-RPC response to msg — its id,
+// and a result or an error — and keeps the protocol version initialize agreed.
+func (b *Bridge) isAnswer(msg *mcpMessage, message []byte) bool {
+	var answer struct {
+		ID     json.RawMessage `json:"id"`
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(message, &answer) != nil || !sameID(answer.ID, msg.ID) || (answer.Result == nil && answer.Error == nil) {
+		return false
+	}
+	var result struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if msg.Method == "initialize" && json.Unmarshal(answer.Result, &result) == nil && result.ProtocolVersion != "" {
+		b.mu.Lock()
+		b.version = result.ProtocolVersion
+		b.mu.Unlock()
+	}
+	return true
+}
+
+// sameID compares two JSON-RPC ids as JSON values: 7 is 7, "7" is not.
+func sameID(a, b json.RawMessage) bool {
+	var ca, cb bytes.Buffer
+	return json.Compact(&ca, a) == nil && json.Compact(&cb, b) == nil && bytes.Equal(ca.Bytes(), cb.Bytes())
 }
 
 func (b *Bridge) reply(id json.RawMessage, code int, message string) {
@@ -171,11 +264,17 @@ func (b *Bridge) reply(id json.RawMessage, code int, message string) {
 	b.write(out)
 }
 
+func (b *Bridge) logf(format string, args ...any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	fmt.Fprintf(b.Log, format+"\n", args...)
+}
+
 // write puts one message on stdout as one line, as the stdio transport requires.
 func (b *Bridge) write(message []byte) {
 	var line bytes.Buffer
 	if err := json.Compact(&line, message); err != nil {
-		fmt.Fprintf(b.Log, "cw mcp: dropped a malformed answer: %v\n", err)
+		b.logf("cw mcp: dropped a malformed answer: %v", err)
 		return
 	}
 	line.WriteByte('\n')
