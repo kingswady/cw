@@ -53,7 +53,7 @@ it; revoke it in the dashboard if it may have leaked.
 ## Read
 
 ```bash
-cw apps                          # the token's apps (deleted ones only with --all)
+cw apps                          # the token's apps (deleted and disabled ones only with --all)
 cw apps --search shop            # name contains "shop", any case
 cw apps --env production --version 19.0 --edition enterprise
 cw apps --server prod-1 --project acme --show-url
@@ -91,7 +91,7 @@ says which filters it applied; if several still do, it lists them and the flags 
 
 Every read command takes `--json` (the API's own response, for `jq`), `--namespace <code>`, `--limit`,
 `--offset` and `--color auto|always|never` (coloured in a terminal unless `NO_COLOR` is set). `apps`, `servers`
-and `installers` leave deleted records out unless `--all`. A token never sees more than its namespaces and your own access, whatever you ask for.
+and `installers` leave deleted and disabled records out unless `--all`. A token never sees more than its namespaces and your own access, whatever you ask for.
 
 ## What needs attention
 

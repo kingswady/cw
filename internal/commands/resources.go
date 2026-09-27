@@ -58,7 +58,7 @@ type resource struct {
 	details []field
 	// extra prints what a detail view has beyond its fields (a run's steps).
 	extra func(a *App, r record, out output.Table) error
-	// hidesDeleted: the API leaves deleted records out unless asked (--all).
+	// hidesDeleted: the API leaves deleted and disabled records out unless asked (--all).
 	hidesDeleted bool
 	// optional columns, each shown when its own flag is given (--show-url).
 	optional []optionalColumn
@@ -223,7 +223,7 @@ func (a *App) readFlagSet(res *resource) (*flag.FlagSet, *readFlags) {
 	fs.BoolVar(&opts.json, "json", false, "print the API response as JSON")
 	fs.StringVar(&opts.color, "color", "auto", "auto (in a terminal, unless NO_COLOR is set), always or never")
 	if res.hidesDeleted {
-		fs.BoolVar(&opts.all, "all", false, "include deleted "+res.name)
+		fs.BoolVar(&opts.all, "all", false, "include deleted and disabled "+res.name)
 	}
 	for _, column := range res.optional {
 		opts.optional[column.flag] = fs.Bool(column.flag, false, column.usage)
@@ -548,7 +548,7 @@ func (a *App) show(c *platform.Client, res *resource, opts *readFlags, ref strin
 const lookupPage = 200
 
 // resolveID accepts an id, or the exact name (any case) of one record the
-// token can see in scope s. Deleted records are left out unless
+// token can see in scope s. Deleted and disabled records are left out unless
 // s.includeDeleted (--all); their ids still work. A resource with a name
 // search is asked only for the names containing ref; the others are paged
 // through, filtered by s.
