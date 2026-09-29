@@ -117,10 +117,13 @@ cw logs shop                         # the newest 200 lines of the last hour
 cw logs shop --since 15m --grep ERROR
 cw logs shop --limit 2000            # up to 2 000 lines, up to a day back
 cw logs shop --follow                # keep printing new lines (Ctrl-C to stop)
+cw logs shop --source restore        # the log of its last restore
+cw logs shop --source main,setup     # several logs at once, each line named by its log
 ```
 
-The app's Odoo log, from the platform's log store — only that app's lines, secrets masked. `--grep` matches
-text, any case. The token needs **Logs** in what it can read.
+The app's logs, from the platform's log store — only that app's lines, secrets masked. `--source` picks which:
+`main` (the Odoo log, the default), `setup`, `restore`, `backup`, `transfer`, `script`, or `all`. `--grep`
+matches text, any case. The token needs **Logs** in what it can read.
 
 ## AI agents (MCP)
 

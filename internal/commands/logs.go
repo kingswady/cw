@@ -20,8 +20,9 @@ const followInterval = 2 * time.Second
 
 type logPage struct {
 	Items []struct {
-		Time string `json:"time"`
-		Line string `json:"line"`
+		Time   string `json:"time"`
+		Line   string `json:"line"`
+		Source string `json:"source"`
 	} `json:"items"`
 	Cursor    string `json:"cursor"`
 	Truncated bool   `json:"truncated"`
@@ -30,6 +31,8 @@ type logPage struct {
 func (a *App) logs(args []string) error {
 	fs := a.newFlags("logs")
 	since := fs.String("since", "1h", "how far back: 30s, 15m, 1h … 24h")
+	source := fs.String("source", "main", "which logs, comma-separated: main (the Odoo log), setup, restore,\n"+
+		"backup, transfer, script — or all")
 	grep := fs.String("grep", "", "only lines containing this text (any case)")
 	limit := fs.Int("limit", 200, "lines to show (1-2000)")
 	follow := fs.Bool("follow", false, "keep printing new lines until interrupted (Ctrl-C)")
@@ -39,7 +42,9 @@ func (a *App) logs(args []string) error {
 	apps := resourceNamed("apps")
 	narrow := narrowFlags(fs, apps, "<app>")
 	fs.Usage = func() {
-		fmt.Fprintf(a.stderr, "Usage: cw logs <app> [flags]\n\nThe app's Odoo log, newest last.\n\n"+
+		fmt.Fprintf(a.stderr, "Usage: cw logs <app> [flags]\n\nThe app's logs, newest last: its Odoo log, and with --source\n"+
+			"the logs of its setup, restore, backup, transfer and script runs:\n"+
+			"  cw logs v19-0 --source main,restore --follow\n\n"+
 			"<app> is an id or a name. Where several apps share the name,\n"+
 			"%s narrow which one it means:\n  cw logs v19-0 --project internal --env production\n\nFlags:\n",
 			joinFlags(narrowing(apps), "and"))
@@ -67,17 +72,22 @@ func (a *App) logs(args []string) error {
 	if err != nil {
 		return err
 	}
-	query := url.Values{"since": {*since}, "limit": {strconv.Itoa(*limit)}}
-	if *grep != "" {
-		query.Set("grep", *grep)
-	}
-	out := logOutput{json: *asJSON, color: color, grep: *grep}
+	out := newLogOutput(*source, *grep, *asJSON, color)
+	query := out.narrow(url.Values{"since": {*since}, "limit": {strconv.Itoa(*limit)}})
 	page, err := a.printLogs(context.Background(), c, id, query, out)
+	var refused *platform.APIError
+	if errors.As(err, &refused) && refused.Code == "unknown_parameter" && out.source != "" {
+		return fmt.Errorf("this platform does not offer --source yet; only the Odoo log (main) is available")
+	}
 	if err != nil {
 		return err
 	}
 	if page.Truncated && !*follow {
 		fmt.Fprintf(a.stderr, "\nShowing the newest %d lines — narrow with --since or --grep, or raise --limit (max 2000).\n", *limit)
+	}
+	if len(page.Items) == 0 && out.source != "" && !out.json {
+		fmt.Fprintf(a.stderr, "No lines from %s in the last %s — a setup, restore, backup, transfer or script\n"+
+			"log only has lines while one runs; widen --since (up to 24h).\n", out.source, *since)
 	}
 	if !*follow {
 		return nil
@@ -121,10 +131,7 @@ func (a *App) followLogs(c *platform.Client, id, cursor string, out logOutput) e
 // up or ctx ends, and returns the cursor it reached.
 func (a *App) catchUp(ctx context.Context, c *platform.Client, id, cursor string, out logOutput) (string, error) {
 	for ctx.Err() == nil {
-		query := url.Values{"after": {cursor}, "limit": {"2000"}}
-		if out.grep != "" {
-			query.Set("grep", out.grep)
-		}
+		query := out.narrow(url.Values{"after": {cursor}, "limit": {"2000"}})
 		page, err := a.printLogs(ctx, c, id, query, out)
 		if err != nil {
 			return cursor, err
@@ -137,11 +144,42 @@ func (a *App) catchUp(ctx context.Context, c *platform.Client, id, cursor string
 	return cursor, ctx.Err()
 }
 
-// logOutput is how answers are printed: raw JSON, or lines — coloured in a terminal.
+// logOutput is what is asked for and how answers are printed: raw JSON, or
+// lines — coloured in a terminal, each named by its log when several are shown.
 type logOutput struct {
 	json  bool
 	color bool
 	grep  string
+	// source is the --source list as sent, "" for the Odoo log alone: a
+	// platform that predates sources refuses the parameter, so main never sends it.
+	source string
+	tagged bool
+}
+
+func newLogOutput(source, grep string, asJSON, color bool) logOutput {
+	var names []string
+	for _, name := range strings.Split(source, ",") {
+		if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
+			names = append(names, name)
+		}
+	}
+	out := logOutput{json: asJSON, color: color, grep: grep}
+	if len(names) != 1 || names[0] != "main" {
+		out.source = strings.Join(names, ",")
+	}
+	out.tagged = len(names) > 1 || out.source == "all"
+	return out
+}
+
+// narrow adds what every page of this command asks for to query.
+func (out logOutput) narrow(query url.Values) url.Values {
+	if out.grep != "" {
+		query.Set("grep", out.grep)
+	}
+	if out.source != "" {
+		query.Set("source", out.source)
+	}
+	return query
 }
 
 func (a *App) printLogs(ctx context.Context, c *platform.Client, id string, query url.Values, out logOutput) (logPage, error) {
@@ -157,7 +195,11 @@ func (a *App) printLogs(ctx context.Context, c *platform.Client, id string, quer
 		return page, output.WriteJSON(a.stdout, raw)
 	}
 	for _, item := range page.Items {
-		fmt.Fprintln(a.stdout, output.LogLine(strings.TrimRight(item.Line, "\n "), out.color, out.grep))
+		line := output.LogLine(strings.TrimRight(item.Line, "\n "), out.color, out.grep)
+		if out.tagged {
+			line = "[" + output.Clean(item.Source) + "] " + line
+		}
+		fmt.Fprintln(a.stdout, line)
 	}
 	return page, nil
 }

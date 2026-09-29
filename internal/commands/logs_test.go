@@ -228,3 +228,101 @@ func TestCtrlCEndsAFollowThatIsCatchingUp(t *testing.T) {
 		t.Errorf("kept paging after Ctrl-C: %q", afters)
 	}
 }
+
+func sourcedAnswer(cursor string, lines ...[2]string) map[string]any {
+	items := make([]map[string]any, len(lines))
+	for i, line := range lines {
+		items[i] = map[string]any{"time": "2026-09-26T10:00:00.000000001Z", "source": line[0], "line": line[1]}
+	}
+	return map[string]any{"items": items, "cursor": cursor, "truncated": false}
+}
+
+func TestSeveralLogsNameEachLineByItsLog(t *testing.T) {
+	server := fakeAPI(t, map[string]any{
+		"/apps/7/logs?limit=200&since=1h&source=main%2Crestore": sourcedAnswer("9",
+			[2]string{"main", "odoo started"}, [2]string{"restore", "restoring"}),
+	})
+	h := newHarness(t, server)
+	if code := h.run("logs", "7", "--source", "main, Restore"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	if h.stdout.String() != "[main] odoo started\n[restore] restoring\n" {
+		t.Errorf("stdout %q", h.stdout)
+	}
+}
+
+func TestOneLogIsPrintedAsItIs(t *testing.T) {
+	server := fakeAPI(t, map[string]any{
+		// main is never sent: a platform that predates sources refuses the parameter.
+		"/apps/7/logs?limit=200&since=1h":              logAnswer("9", "odoo line"),
+		"/apps/7/logs?limit=200&since=1h&source=setup": sourcedAnswer("9", [2]string{"setup", "installing"}),
+	})
+	for source, want := range map[string]string{"main": "odoo line\n", "setup": "installing\n"} {
+		h := newHarness(t, server)
+		if code := h.run("logs", "7", "--source", source); code != 0 {
+			t.Fatalf("%s: exit %d: %s", source, code, h.stderr)
+		}
+		if h.stdout.String() != want {
+			t.Errorf("%s: stdout %q", source, h.stdout)
+		}
+	}
+}
+
+func TestAllNamesEveryLine(t *testing.T) {
+	server := fakeAPI(t, map[string]any{
+		"/apps/7/logs?limit=200&since=1h&source=all": sourcedAnswer("9", [2]string{"backup", "dumped"}),
+	})
+	h := newHarness(t, server)
+	if code := h.run("logs", "7", "--source", "all"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	if h.stdout.String() != "[backup] dumped\n" {
+		t.Errorf("stdout %q", h.stdout)
+	}
+}
+
+func TestFollowKeepsAskingForTheSameLogs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var sources []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sources = append(sources, r.URL.Query().Get("source"))
+		answer := sourcedAnswer("100", [2]string{"setup", "step one"})
+		if r.URL.Query().Get("after") != "" {
+			cancel() // the user pressed Ctrl-C
+			answer = sourcedAnswer("100")
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": answer})
+	}))
+	t.Cleanup(server.Close)
+	h := newHarness(t, server)
+	h.app.interrupt = func() (context.Context, func()) { return ctx, cancel }
+	if code := h.run("logs", "7", "--source", "setup,script", "--follow"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	if strings.Join(sources, " ") != "setup,script setup,script" {
+		t.Errorf("sources asked %q", sources)
+	}
+}
+
+func TestAPlatformWithoutSourcesSaysSo(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":{"code":"unknown_parameter","message":"Unknown parameter(s): source"}}`))
+	}))
+	t.Cleanup(server.Close)
+	h := newHarness(t, server)
+	if code := h.run("logs", "7", "--source", "setup"); code != 1 || !strings.Contains(h.stderr.String(), "does not offer --source") {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+}
+
+func TestAnEmptyWorkflowLogSaysWhy(t *testing.T) {
+	server := fakeAPI(t, map[string]any{"/apps/7/logs?limit=200&since=1h&source=restore": sourcedAnswer("9")})
+	h := newHarness(t, server)
+	if code := h.run("logs", "7", "--source", "restore"); code != 0 {
+		t.Fatalf("exit %d: %s", code, h.stderr)
+	}
+	if !strings.Contains(h.stderr.String(), "No lines from restore in the last 1h") {
+		t.Errorf("stderr %q", h.stderr)
+	}
+}
